@@ -1,0 +1,33 @@
+name: Unzip File Automatically
+
+on:
+  push:
+    branches:
+      - main  # जब भी main ब्रांच पर कोड पुश होगा, यह चलेगा
+  workflow_dispatch: # इससे आप इस प्रोसेस को मैन्युअली (बटन दबाकर) भी चला सकते हैं
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # GitHub को फ़ाइलें वापस रिपोजिटरी में लिखने की अनुमति देने के लिए
+
+    steps:
+      # 1. रिपोजिटरी का कोड चेकआउट करें
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # 2. ZIP फ़ाइल को अनज़िप करें
+      # 'your-file.zip' को अपनी असली ज़िप फ़ाइल के नाम से बदलें
+      - name: Extract ZIP File
+        run: |
+          unzip NAIN.zip -d extracted-contents/
+
+      # 3. एक्सट्रैक्ट की गई फ़ाइलों को वापस GitHub पर पुश करें
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@://github.com"
+          git add .
+          git commit -m "Automated unzip: Extracted contents of ZIP file" || echo "No changes to commit"
+          git push
