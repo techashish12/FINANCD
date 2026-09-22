@@ -25,6 +25,7 @@ export default function LoginScreen({ navigation }) {
             const res = await api.post('/login', { username: username.trim(), password });
             await setStorage('token', res.data.token);
             await setStorage('role', res.data.user.role);
+            await setStorage('features', res.data.user.features || 'ALL');
             
             // Set default headers for subsequent requests
             api.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;

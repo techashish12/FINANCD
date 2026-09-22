@@ -34,6 +34,23 @@ export default function DashboardScreen() {
   const [today, setToday] = useState([]);
   const [upcoming, setUpcoming] = useState([]);
   const [companyName, setCompanyName] = useState('FinTrack');
+  const [whatsappTemplateUpcoming, setWhatsappTemplateUpcoming] = useState('');
+  const [whatsappTemplateOverdue, setWhatsappTemplateOverdue] = useState('');
+  const [allowedFeatures, setAllowedFeatures] = useState('ALL');
+
+  useEffect(() => {
+      const fetchFeatures = async () => {
+          let features = 'ALL';
+          if (Platform.OS === 'web') {
+              features = localStorage.getItem('features') || 'ALL';
+          } else {
+              const SecureStore = require('expo-secure-store');
+              features = await SecureStore.getItemAsync('features') || 'ALL';
+          }
+          setAllowedFeatures(features);
+      };
+      fetchFeatures();
+  }, []);
   
   // Global Date & Type Filtering State (Affects all backend queries)
   const [startDate, setStartDate] = useState(null);
@@ -89,8 +106,10 @@ export default function DashboardScreen() {
       setUpcoming(upcomingRes.data);
       
       const settingsRes = await getSettings();
-      if (settingsRes.data && settingsRes.data.company_name) {
-          setCompanyName(settingsRes.data.company_name);
+      if (settingsRes.data) {
+          if (settingsRes.data.company_name) setCompanyName(settingsRes.data.company_name);
+          if (settingsRes.data.whatsapp_template_upcoming) setWhatsappTemplateUpcoming(settingsRes.data.whatsapp_template_upcoming);
+          if (settingsRes.data.whatsapp_template_overdue) setWhatsappTemplateOverdue(settingsRes.data.whatsapp_template_overdue);
       }
     } catch (error) {
       console.error('Error fetching dashboard stats:', error);
@@ -202,11 +221,16 @@ export default function DashboardScreen() {
                       <Text style={{color: '#3498db', fontWeight: 'bold'}}>📞 Call</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => {
-                      const msg = `Hello ${item.customer_name}, your ${item.finance_type} installment of ₹${item.amount} is due on ${item.due_date}. Regards, ${companyName}`;
-                      const url = Platform.OS === 'web' 
-                          ? `https://wa.me/91${item.customer_phone}?text=${encodeURIComponent(msg)}`
-                          : `whatsapp://send?phone=+91${item.customer_phone}&text=${encodeURIComponent(msg)}`;
-                      Linking.openURL(url);
+                      const isOverdue = (item.status === 'DELAYED' || item.status === 'OVERDUE' || (new Date(item.due_date) < new Date(new Date().toISOString().split('T')[0])));
+                      const template = isOverdue ? whatsappTemplateOverdue : whatsappTemplateUpcoming;
+                      sendWhatsAppMessage(
+                          item.customer_phone,
+                          template,
+                          item.customer_name,
+                          item.amount,
+                          item.due_date,
+                          companyName
+                      );
                   }}>
                       <Text style={{color: '#25D366', fontWeight: 'bold'}}>💬 WhatsApp</Text>
                   </TouchableOpacity>
@@ -233,7 +257,9 @@ export default function DashboardScreen() {
           <Text style={{fontWeight: 'bold', marginBottom: 5}}>Global Filter</Text>
           
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{flexDirection: 'row', marginBottom: 10}}>
-              {['ALL', 'TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'INSURANCE', 'PERSONAL'].map(type => (
+              {['ALL', 'TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'INSURANCE', 'PERSONAL', 'GIRVI', 'HOME_LOAN']
+                  .filter(type => type === 'ALL' || allowedFeatures === 'ALL' || allowedFeatures.includes(type))
+                  .map(type => (
                   <TouchableOpacity key={type} style={[styles.typeBtn, financeType === type && styles.typeBtnActive]} onPress={() => setFinanceType(type)}>
                       <Text style={[styles.typeBtnText, financeType === type && {color: '#fff'}]}>{type.replace('_', ' ')}</Text>
                   </TouchableOpacity>

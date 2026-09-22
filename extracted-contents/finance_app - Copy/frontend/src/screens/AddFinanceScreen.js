@@ -5,12 +5,28 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { addDays, format } from 'date-fns';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
+import * as SecureStore from 'expo-secure-store';
 import { universalAlert } from '../utils';
 
 export default function AddFinanceScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   
+  const [allowedFeatures, setAllowedFeatures] = useState('ALL');
+
+  useEffect(() => {
+      const fetchFeatures = async () => {
+          let features = 'ALL';
+          if (Platform.OS === 'web') {
+              features = localStorage.getItem('features') || 'ALL';
+          } else {
+              features = await SecureStore.getItemAsync('features') || 'ALL';
+          }
+          setAllowedFeatures(features);
+      };
+      fetchFeatures();
+  }, []);
+
   // If we receive an existing customer, skip step 1
   const existingCustomer = route.params?.existingCustomer;
   
@@ -45,6 +61,12 @@ export default function AddFinanceScreen() {
   const [guarantorPhone, setGuarantorPhone] = useState('');
   const [startDateObj, setStartDateObj] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // Auto/Manual Options
+  const [calcMode, setCalcMode] = useState('MANUAL'); // 'MANUAL' or 'AUTO'
+  const [interestRate, setInterestRate] = useState(''); // Annual Interest Rate %
+  const [interestType, setInterestType] = useState('FLAT'); // 'FLAT' or 'REDUCING'
+
   const [intervalValue, setIntervalValue] = useState('1'); 
   const [intervalType, setIntervalType] = useState('Months'); // 'Days', 'Months', 'Years'
   const [installments, setInstallments] = useState([]);
@@ -90,48 +112,124 @@ export default function AddFinanceScreen() {
   };
 
   const handleGenerateInstallments = () => {
-    if (!totalFinance || (!installmentAmount && !totalInstallments)) {
-      return universalAlert('Error', 'Please fill all finance details.', []);
+    if (!totalFinance || !totalInstallments) {
+      return universalAlert('Error', 'Please fill Principal Amount and Total Installments.', []);
     }
 
-    const total = parseFloat(totalFinance);
-    let instAmt = parseFloat(installmentAmount);
+    const principal = parseFloat(totalFinance);
     let totalInstCount = parseInt(totalInstallments, 10);
     
-    if (instAmt > 0 && !totalInstCount) {
-        totalInstCount = Math.ceil(total / instAmt);
-    } else if (totalInstCount > 0 && !instAmt) {
-        instAmt = total / totalInstCount;
-    } else if (!instAmt && !totalInstCount) {
-        return universalAlert('Error', 'Provide Installment Amount or Number of Installments', []);
-    }
-
-    let generated = [];
-    let currentDate = new Date(startDateObj);
-    const valToAdd = parseInt(intervalValue, 10) || 1;
-
-    for (let i = 0; i < totalInstCount; i++) {
-        const amountForThisInst = (i === totalInstCount - 1 && (total % instAmt !== 0)) 
-            ? (total % instAmt) 
-            : instAmt;
-
-        generated.push({
-            id: i.toString(),
-            amount: amountForThisInst,
-            due_date: format(currentDate, 'yyyy-MM-dd')
-        });
-        
-        // Intelligent date addition
-        if (intervalType === 'Days') {
-            currentDate = addDays(currentDate, valToAdd);
-        } else if (intervalType === 'Months') {
-            currentDate.setMonth(currentDate.getMonth() + valToAdd);
-        } else if (intervalType === 'Years') {
-            currentDate.setFullYear(currentDate.getFullYear() + valToAdd);
+    if (calcMode === 'MANUAL') {
+        if (!installmentAmount) {
+            return universalAlert('Error', 'Provide Installment Amount for Manual Calculation.', []);
         }
+        let instAmt = parseFloat(installmentAmount);
+
+        let generated = [];
+        let currentDate = new Date(startDateObj);
+        const valToAdd = parseInt(intervalValue, 10) || 1;
+
+        for (let i = 0; i < totalInstCount; i++) {
+            const amountForThisInst = (i === totalInstCount - 1 && (principal % instAmt !== 0))
+                ? parseFloat((principal % instAmt).toFixed(2))
+                : instAmt;
+
+            generated.push({
+                id: i.toString(),
+                amount: amountForThisInst,
+                due_date: format(currentDate, 'yyyy-MM-dd')
+            });
+
+            if (intervalType === 'Days') {
+                currentDate = addDays(currentDate, valToAdd);
+            } else if (intervalType === 'Months') {
+                currentDate.setMonth(currentDate.getMonth() + valToAdd);
+            } else if (intervalType === 'Years') {
+                currentDate.setFullYear(currentDate.getFullYear() + valToAdd);
+            }
+        }
+        setInstallments(generated);
+        setStep(3);
+    } else {
+        // Auto Calculation Logic
+        if (!interestRate) {
+            return universalAlert('Error', 'Please provide Interest Rate for Auto Calculation.', []);
+        }
+        const rate = parseFloat(interestRate);
+        let generated = [];
+        let currentDate = new Date(startDateObj);
+        const valToAdd = parseInt(intervalValue, 10) || 1;
+        
+        if (interestType === 'FLAT') {
+            // Flat Interest Calculation
+            let durationYears = (totalInstCount * valToAdd) / (intervalType === 'Months' ? 12 : intervalType === 'Days' ? 365 : 1);
+            if(intervalType === 'Years') durationYears = totalInstCount * valToAdd;
+
+            const totalInterest = principal * (rate / 100) * durationYears;
+            const totalPayable = principal + totalInterest;
+            const emi = Math.round(totalPayable / totalInstCount);
+
+            for (let i = 0; i < totalInstCount; i++) {
+                generated.push({
+                    id: i.toString(),
+                    amount: (i === totalInstCount - 1) ? (totalPayable - (emi * (totalInstCount - 1))) : emi,
+                    due_date: format(currentDate, 'yyyy-MM-dd')
+                });
+
+                if (intervalType === 'Days') {
+                    currentDate = addDays(currentDate, valToAdd);
+                } else if (intervalType === 'Months') {
+                    currentDate.setMonth(currentDate.getMonth() + valToAdd);
+                } else if (intervalType === 'Years') {
+                    currentDate.setFullYear(currentDate.getFullYear() + valToAdd);
+                }
+            }
+        } else {
+            // Reducing Balance Calculation
+            let periodsPerYear = 12;
+            if (intervalType === 'Days') periodsPerYear = 365 / valToAdd;
+            else if (intervalType === 'Months') periodsPerYear = 12 / valToAdd;
+            else if (intervalType === 'Years') periodsPerYear = 1 / valToAdd;
+
+            const r = (rate / 100) / periodsPerYear;
+            const n = totalInstCount;
+
+            let emi = principal;
+            if (r > 0) {
+                emi = principal * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1);
+            }
+            emi = Math.round(emi);
+
+            let balance = principal;
+            for (let i = 0; i < totalInstCount; i++) {
+                let interestForPeriod = balance * r;
+                let principalForPeriod = emi - interestForPeriod;
+
+                if (i === totalInstCount - 1) {
+                    emi = balance + interestForPeriod; // Adjust last EMI
+                }
+
+                generated.push({
+                    id: i.toString(),
+                    amount: Math.round(emi),
+                    due_date: format(currentDate, 'yyyy-MM-dd')
+                });
+
+                balance -= principalForPeriod;
+
+                if (intervalType === 'Days') {
+                    currentDate = addDays(currentDate, valToAdd);
+                } else if (intervalType === 'Months') {
+                    currentDate.setMonth(currentDate.getMonth() + valToAdd);
+                } else if (intervalType === 'Years') {
+                    currentDate.setFullYear(currentDate.getFullYear() + valToAdd);
+                }
+            }
+        }
+
+        setInstallments(generated);
+        setStep(3);
     }
-    setInstallments(generated);
-    setStep(3);
   };
 
   const updateCustomDate = (index, newDate) => {
@@ -268,7 +366,9 @@ export default function AddFinanceScreen() {
           
           <Text style={styles.label}>Finance Type</Text>
           <View style={{flexDirection: 'row', gap: 5, marginBottom: 15, flexWrap: 'wrap'}}>
-              {['TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'GIRVI', 'HOME_LOAN', 'PERSONAL'].map(type => (
+              {['TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'GIRVI', 'HOME_LOAN', 'PERSONAL']
+                .filter(type => allowedFeatures === 'ALL' || allowedFeatures.includes(type))
+                .map(type => (
                   <TouchableOpacity key={type} style={[styles.typeBtn, financeType === type && styles.typeBtnActive]} onPress={() => setFinanceType(type)}>
                       <Text style={[styles.typeBtnText, financeType === type && {color: '#fff'}]}>{type.replace('_', ' ')}</Text>
                   </TouchableOpacity>
@@ -323,11 +423,42 @@ export default function AddFinanceScreen() {
               </>
           )}
 
-          <Text style={styles.label}>Finance Calculation</Text>
-          <TextInput style={styles.input} placeholder="Total Finance Amount" value={totalFinance} onChangeText={setTotalFinance} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="Number of Installments (optional)" value={totalInstallments} onChangeText={setTotalInstallments} keyboardType="numeric" />
-          <TextInput style={styles.input} placeholder="Installment Amount (optional)" value={installmentAmount} onChangeText={setInstallmentAmount} keyboardType="numeric" />
+          <Text style={styles.label}>Calculation Mode</Text>
+          <View style={{flexDirection: 'row', marginBottom: 15, gap: 10}}>
+              {['MANUAL', 'AUTO'].map(mode => (
+                  <TouchableOpacity
+                      key={mode}
+                      style={[styles.typeBtn, calcMode === mode && styles.typeBtnActive, {flex: 1}]}
+                      onPress={() => setCalcMode(mode)}
+                  >
+                      <Text style={[styles.typeBtnText, calcMode === mode && {color: '#fff'}, {textAlign: 'center'}]}>{mode === 'MANUAL' ? 'Manual Entry' : 'Auto Calculate'}</Text>
+                  </TouchableOpacity>
+              ))}
+          </View>
+
+          <Text style={styles.label}>Finance Details</Text>
+          <TextInput style={styles.input} placeholder="Principal / Total Amount" value={totalFinance} onChangeText={setTotalFinance} keyboardType="numeric" />
+          <TextInput style={styles.input} placeholder="Number of Installments" value={totalInstallments} onChangeText={setTotalInstallments} keyboardType="numeric" />
           
+          {calcMode === 'MANUAL' ? (
+              <TextInput style={styles.input} placeholder="Installment Amount" value={installmentAmount} onChangeText={setInstallmentAmount} keyboardType="numeric" />
+          ) : (
+              <>
+                  <TextInput style={styles.input} placeholder="Annual Interest Rate (%)" value={interestRate} onChangeText={setInterestRate} keyboardType="numeric" />
+                  <View style={{flexDirection: 'row', marginBottom: 15, gap: 10}}>
+                      {['FLAT', 'REDUCING'].map(type => (
+                          <TouchableOpacity
+                              key={type}
+                              style={[styles.typeBtn, interestType === type && styles.typeBtnActive, {flex: 1}]}
+                              onPress={() => setInterestType(type)}
+                          >
+                              <Text style={[styles.typeBtnText, interestType === type && {color: '#fff'}, {textAlign: 'center'}]}>{type === 'FLAT' ? 'Flat Rate' : 'Reducing Balance'}</Text>
+                          </TouchableOpacity>
+                      ))}
+                  </View>
+              </>
+          )}
+
           <Text style={styles.label}>Advanced Options</Text>
           <TextInput style={styles.input} placeholder="Late Fee Per Day (₹) [optional]" value={lateFeePerDay} onChangeText={setLateFeePerDay} keyboardType="numeric" />
           <TextInput style={styles.input} placeholder="Guarantor Name (optional)" value={guarantorName} onChangeText={setGuarantorName} />

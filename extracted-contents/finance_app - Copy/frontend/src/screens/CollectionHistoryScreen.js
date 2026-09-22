@@ -5,6 +5,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { format } from 'date-fns';
 import { BarChart } from 'react-native-chart-kit';
 import { Dimensions } from 'react-native';
+import * as SecureStore from 'expo-secure-store';
 
 const screenWidth = Dimensions.get('window').width;
 
@@ -18,6 +19,20 @@ export default function CollectionHistoryScreen() {
     const [endDate, setEndDate] = useState(null);
     const [financeType, setFinanceType] = useState('ALL');
     const [paymentMethod, setPaymentMethod] = useState('ALL');
+    const [allowedFeatures, setAllowedFeatures] = useState('ALL');
+
+    useEffect(() => {
+        const fetchFeatures = async () => {
+            let features = 'ALL';
+            if (Platform.OS === 'web') {
+                features = localStorage.getItem('features') || 'ALL';
+            } else {
+                features = await SecureStore.getItemAsync('features') || 'ALL';
+            }
+            setAllowedFeatures(features);
+        };
+        fetchFeatures();
+    }, []);
 
     // Modals
     const [showStartPicker, setShowStartPicker] = useState(false);
@@ -127,7 +142,9 @@ export default function CollectionHistoryScreen() {
                             ))}
                         </ScrollView>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{flexDirection: 'row', marginBottom: 10}}>
-                            {['ALL', 'TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'INSURANCE', 'PERSONAL'].map(type => (
+                            {['ALL', 'TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'INSURANCE', 'PERSONAL', 'GIRVI', 'HOME_LOAN']
+                              .filter(type => type === 'ALL' || allowedFeatures === 'ALL' || allowedFeatures.includes(type))
+                              .map(type => (
                                 <TouchableOpacity key={type} style={[styles.typeBtn, financeType === type && styles.typeBtnActive]} onPress={() => setFinanceType(type)}>
                                     <Text style={[styles.typeBtnText, financeType === type && {color: '#fff'}]}>{type.replace('_', ' ')}</Text>
                                 </TouchableOpacity>

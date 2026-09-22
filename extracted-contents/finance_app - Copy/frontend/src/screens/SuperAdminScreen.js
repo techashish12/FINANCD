@@ -37,6 +37,8 @@ export default function SuperAdminScreen() {
         }
     };
 
+    const [allowedFeatures, setAllowedFeatures] = useState('');
+
     const handleCreateTenant = async () => {
         if (!companyName || !adminUsername || !adminPassword) return alert("Fill all fields");
         try {
@@ -44,12 +46,13 @@ export default function SuperAdminScreen() {
                 company_name: companyName,
                 admin_username: adminUsername,
                 admin_password: adminPassword,
-                allowed_features: 'ALL'
+                allowed_features: allowedFeatures || 'ALL'
             });
             alert('SaaS Client created successfully!');
             setCompanyName('');
             setAdminUsername('');
             setAdminPassword('');
+            setAllowedFeatures('');
             loadTenants();
         } catch (e) {
             alert('Creation failed');
@@ -75,6 +78,7 @@ export default function SuperAdminScreen() {
                 <TextInput style={styles.input} placeholder="Company Name" value={companyName} onChangeText={setCompanyName} />
                 <TextInput style={styles.input} placeholder="Admin Username" value={adminUsername} onChangeText={setAdminUsername} autoCapitalize="none" />
                 <TextInput style={styles.input} placeholder="Admin Password" value={adminPassword} onChangeText={setAdminPassword} secureTextEntry />
+                <TextInput style={styles.input} placeholder="Allowed Loan Types (e.g., TWO_WHEELER,GIRVI or ALL)" value={allowedFeatures} onChangeText={setAllowedFeatures} autoCapitalize="characters" />
                 <TouchableOpacity style={styles.btn} onPress={handleCreateTenant}>
                     <Text style={{color: '#fff', fontWeight: 'bold'}}>Create Client</Text>
                 </TouchableOpacity>
