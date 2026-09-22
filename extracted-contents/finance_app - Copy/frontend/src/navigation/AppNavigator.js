@@ -9,6 +9,7 @@ import CustomerDetailsScreen from '../screens/CustomerDetailsScreen';
 import LoginScreen from '../screens/LoginScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import CollectionHistoryScreen from '../screens/CollectionHistoryScreen';
+import ReportsScreen from '../screens/ReportsScreen';
 import SuperAdminScreen from '../screens/SuperAdminScreen';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -30,6 +31,8 @@ function HomeTabs() {
               iconName = focused ? 'people' : 'people-outline';
             } else if (route.name === 'History') {
               iconName = focused ? 'time' : 'time-outline';
+            } else if (route.name === 'Reports') {
+              iconName = focused ? 'bar-chart' : 'bar-chart-outline';
             } else if (route.name === 'Settings') {
               iconName = focused ? 'settings' : 'settings-outline';
             }
@@ -40,6 +43,7 @@ function HomeTabs() {
         <Tab.Screen name="Dashboard" component={DashboardScreen} />
         <Tab.Screen name="Customers" component={CustomersScreen} />
         <Tab.Screen name="History" component={CollectionHistoryScreen} />
+        <Tab.Screen name="Reports" component={ReportsScreen} />
         <Tab.Screen name="Settings" component={SettingsScreen} />
         <Tab.Screen 
             name="CustomerDetails" 
