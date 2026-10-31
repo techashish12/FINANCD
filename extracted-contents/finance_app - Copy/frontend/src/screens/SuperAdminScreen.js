@@ -70,6 +70,10 @@ export default function SuperAdminScreen() {
                 </TouchableOpacity>
             </View>
 
+            <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('AdminManagement')}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Open Full System Management</Text>
+            </TouchableOpacity>
+
             <View style={styles.card}>
                 <Text style={styles.cardTitle}>Provision New Client</Text>
                 <TextInput style={styles.input} placeholder="Company Name" value={companyName} onChangeText={setCompanyName} />
