@@ -10,6 +10,7 @@ import LoginScreen from '../screens/LoginScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import CollectionHistoryScreen from '../screens/CollectionHistoryScreen';
 import SuperAdminScreen from '../screens/SuperAdminScreen';
+import AdminManagementScreen from '../screens/AdminManagementScreen';
 import { Ionicons } from '@expo/vector-icons';
 
 const Tab = createBottomTabNavigator();
@@ -41,6 +42,7 @@ function HomeTabs() {
         <Tab.Screen name="Customers" component={CustomersScreen} />
         <Tab.Screen name="History" component={CollectionHistoryScreen} />
         <Tab.Screen name="Settings" component={SettingsScreen} />
+        <Tab.Screen name="Management" component={AdminManagementScreen} options={{ title: 'Management' }} />
         <Tab.Screen 
             name="CustomerDetails" 
             component={CustomerDetailsScreen} 
@@ -56,6 +58,7 @@ export default function AppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="Login">
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="SuperAdmin" component={SuperAdminScreen} />
+        <Stack.Screen name="AdminManagement" component={AdminManagementScreen} options={{ headerShown: true, title: 'Management' }} />
         <Stack.Screen name="Home" component={HomeTabs} />
         <Stack.Screen 
             name="AddFinance" 
