@@ -36,15 +36,10 @@ app.get('/', (req, res) => {
 
 // JWT Middleware - Now enforces Tenant checks
 const authenticate = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'No token provided' });
-    
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ error: 'Invalid token' });
-        req.user = user;
-        next();
-    });
+    // The global security guard already verified the token and reloaded the current DB role/tenant.
+    // Do not overwrite that fresh identity with stale JWT claims.
+    if (req.user && req.user.id) return next();
+    return res.status(401).json({ error: 'Authentication required' });
 };
 
 // --- AUTHENTICATION ---
@@ -57,7 +52,7 @@ app.post('/api/login', (req, res) => {
     }
 
     // Get the user and their specific tenant's feature flags
-    db.get(`SELECT u.*, t.allowed_features FROM users u LEFT JOIN tenants t ON u.tenant_id = t.id WHERE u.username = ?`, [username], (err, user) => {
+    db.get(`SELECT u.*, t.allowed_features, COALESCE(t.is_active,1) tenant_active FROM users u LEFT JOIN tenants t ON u.tenant_id = t.id WHERE u.username = ?`, [username], (err, user) => {
         if (err) {
             console.error("DB Error on Login:", err.message);
             return res.status(500).json({ error: err.message });
@@ -67,6 +62,7 @@ app.post('/api/login', (req, res) => {
             return res.status(401).json({ error: `Username '${username}' not found.` });
         }
 
+        if (user.tenant_id != null && Number(user.tenant_active) !== 1) return res.status(403).json({ error: 'This finance company account is disabled' });
         const isMatch = bcrypt.compareSync(password, user.password);
         if (!isMatch) {
             console.error(`Login failed: Incorrect password for user '${username}'`);
@@ -134,12 +130,24 @@ app.post('/api/super/tenants', authenticate, (req, res) => {
 
 app.put('/api/super/tenants/:id', authenticate, (req, res) => {
     if (req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Unauthorized' });
-    const { allowed_features, is_active } = req.body;
-    
-    db.run(`UPDATE tenants SET allowed_features = ?, is_active = ? WHERE id = ?`, [allowed_features, is_active, req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Tenant updated successfully' });
-    });
+    const { allowed_features, is_active, email, phone, contact_person, address, plan_name } = req.body || {};
+    const supported = ['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'];
+    const selected = Array.isArray(allowed_features) ? allowed_features : String(allowed_features || '').split(',');
+    const features = [...new Set(selected.map(x=>String(x).trim()).filter(x=>supported.includes(x)))];
+    if (allowed_features !== undefined && !features.length) return res.status(400).json({error:'Select at least one supported finance product'});
+    db.run(`UPDATE tenants SET
+      allowed_features=COALESCE(?,allowed_features),is_active=COALESCE(?,is_active),
+      email=COALESCE(?,email),phone=COALESCE(?,phone),contact_person=COALESCE(?,contact_person),
+      address=COALESCE(?,address),plan_name=COALESCE(?,plan_name)
+      WHERE id=?`,
+      [allowed_features===undefined?null:features.join(','),is_active===undefined?null:is_active,
+       email===undefined?null:email,phone===undefined?null:phone,contact_person===undefined?null:contact_person,
+       address===undefined?null:address,plan_name===undefined?null:plan_name,req.params.id],
+      function(err) {
+        if(err) return res.status(500).json({error:err.message});
+        if(!this.changes) return res.status(404).json({error:'Finance company not found'});
+        res.json({message:'Finance company updated',allowed_features:allowed_features===undefined?undefined:features});
+      });
 });
 
 app.get('/api/users', authenticate, (req, res) => {
