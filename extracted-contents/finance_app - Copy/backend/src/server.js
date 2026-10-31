@@ -82,14 +82,14 @@ app.post('/api/login', (req, res) => {
             return res.status(500).json({ error: err.message });
         }
         if (!user) {
-            console.error(`Login failed: Username '${username}' not found in DB`);
+            recent.push(now); loginAttempts.set(loginKey, recent);
             return res.status(401).json({ error: `Username '${username}' not found.` });
         }
 
         if (user.tenant_id != null && Number(user.tenant_active) !== 1) return res.status(403).json({ error: 'This finance company account is disabled' });
         const isMatch = bcrypt.compareSync(password, user.password);
         if (!isMatch) {
-            console.error(`Login failed: Incorrect password for user '${username}'`);
+            recent.push(now); loginAttempts.set(loginKey, recent);
             return res.status(401).json({ error: 'Incorrect password.' });
         }
 
