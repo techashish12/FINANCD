@@ -419,7 +419,14 @@ function registerManagementRoutes(app, db) {
     const expClause=start_date && end_date ? ' AND expense_date BETWEEN ? AND ?' : '';
     const paidParams=[tenantId,...(dateClause?[start_date,end_date]:[])];
     const expenseParams=[tenantId,...(expClause?[start_date,end_date]:[])];
-    db.get(`SELECT COALESCE(SUM(amount+late_fee+other_charges),0) income, COUNT(*) payment_count FROM installments WHERE tenant_id=? AND status='PAID'${dateClause}`,paidParams,(err,income)=>{
+    let productClause='';
+    if(!isSuper(req) && req.user.allowed_features!=='ALL') {
+      const allowed=req.user.allowed_features.split(',').filter(Boolean);
+      if(allowed.length){productClause=' AND l.finance_type IN ('+allowed.map(()=>'?').join(',')+')';paidParams.push(...allowed);}
+    }
+    db.get(`SELECT COALESCE(SUM(i.amount+i.late_fee+i.other_charges),0) income, COUNT(*) payment_count
+      FROM installments i JOIN loans l ON l.id=i.loan_id
+      WHERE i.tenant_id=? AND i.status='PAID'${dateClause}${productClause}`,paidParams,(err,income)=>{
       if(err) return res.status(500).json({error:err.message});
       db.get(`SELECT COALESCE(SUM(amount),0) expenses, COUNT(*) expense_count FROM expenses WHERE tenant_id=?${expClause}`,expenseParams,(e,expense)=>{
         if(e) return res.status(500).json({error:e.message});
