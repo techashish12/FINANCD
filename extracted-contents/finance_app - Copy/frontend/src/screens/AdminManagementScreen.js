@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { api } from '../api';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 const money = value => '₹' + Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
 const notify = (title, message) => Platform.OS === 'web' ? window.alert(title + '\n' + message) : Alert.alert(title, message);
@@ -125,7 +127,15 @@ export default function AdminManagementScreen() {
     try {
       const response=await api.post('/manage/receipts',{installment_id:Number(receiptInstallment)});
       const r=response.data.receipt;
-      notify('Receipt created',r.receipt_number+'\nAmount: '+money(r.amount)+'\nDate: '+r.paid_date);
+      const customer=response.data.customer || {};
+      const html=`<html><body style="font-family:Arial;padding:28px;color:#17243d"><h1>FINANCD</h1><h2>Payment Receipt</h2><hr/><p><b>Receipt:</b> ${r.receipt_number}</p><p><b>Customer:</b> ${customer.name || 'Customer'}</p><p><b>Loan:</b> ${response.data.loan_code || ''}</p><p><b>Paid date:</b> ${r.paid_date}</p><p><b>Payment method:</b> ${r.payment_method || 'CASH'}</p><h2>Amount received: ${money(r.amount)}</h2><hr/><p>Thank you for your payment.</p></body></html>`;
+      if(Platform.OS==='web') {
+        await Print.printAsync({html});
+      } else {
+        const file=await Print.printToFileAsync({html});
+        if(await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri,{mimeType:'application/pdf',dialogTitle:'Share payment receipt'});
+        else notify('Receipt created',r.receipt_number+' · '+money(r.amount));
+      }
     } catch(e) { notify('Could not create receipt',e.message); }
   };
 
