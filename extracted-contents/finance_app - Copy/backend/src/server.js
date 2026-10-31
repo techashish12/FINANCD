@@ -96,7 +96,7 @@ app.get('/api/super/tenants', authenticate, (req, res) => {
 
 app.post('/api/super/tenants', authenticate, (req, res) => {
     if (req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Unauthorized' });
-    const { company_name, email, phone, contact_person, address, plan_name, allowed_features, admin_username, admin_password } = req.body || {};
+    const { company_name, email, phone, contact_person, address, plan_name, allowed_features, admin_username, admin_email, admin_password } = req.body || {};
     const supported = ['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'];
     const selected = Array.isArray(allowed_features) ? allowed_features : String(allowed_features || '').split(',');
     const features = [...new Set(selected.map(x=>String(x).trim()).filter(x=>supported.includes(x)))];
@@ -112,8 +112,8 @@ app.post('/api/super/tenants', authenticate, (req, res) => {
         function(err) {
           if(err){db.run('ROLLBACK');return res.status(400).json({error:err.message});}
           const tenantId=this.lastID;
-          db.run(`INSERT INTO users (tenant_id,username,password,role) VALUES (?,?,?,'ADMIN')`,
-            [tenantId,admin_username.trim(),hash],function(userErr){
+          db.run(`INSERT INTO users (tenant_id,username,email,password,role) VALUES (?,?,?,?,'ADMIN')`,
+            [tenantId,admin_username.trim(),admin_email || email.trim().toLowerCase(),hash],function(userErr){
               if(userErr){db.run('ROLLBACK');return res.status(400).json({error:userErr.message});}
               db.run('INSERT INTO settings (tenant_id,company_name,company_phone) VALUES (?,?,?)',
                 [tenantId,company_name.trim(),phone || ''],function(settingsErr){
