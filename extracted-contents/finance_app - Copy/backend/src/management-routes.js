@@ -137,7 +137,7 @@ function registerManagementRoutes(app, db) {
     try {
       const claims = jwt.verify(token, secret);
       db.get(
-        `SELECT u.id,u.username,u.role,u.tenant_id,COALESCE(t.is_active,1) tenant_active
+        `SELECT u.id,u.username,u.role,u.tenant_id,COALESCE(t.is_active,1) tenant_active,COALESCE(t.allowed_features,'ALL') allowed_features
          FROM users u LEFT JOIN tenants t ON t.id=u.tenant_id WHERE u.id=?`,
         [claims.id],
         (err, user) => {
@@ -209,6 +209,8 @@ function registerManagementRoutes(app, db) {
     if(!tenantId) return res.status(400).json({error:'Organization is required'});
     const {status='ALL',finance_type='ALL',start_date,end_date,customer_id}=req.query;
     const filters=['i.tenant_id=?']; const params=[tenantId];
+    if(finance_type!=='ALL') { filters.push('l.finance_type=?'); params.push(finance_type); }
+    else if(!isSuper(req) && req.user.allowed_features!=='ALL') { const allowed=req.user.allowed_features.split(',').filter(Boolean); if(allowed.length){filters.push('l.finance_type IN ('+allowed.map(()=>'?').join(',')+')');params.push(...allowed);} }
     if(status!=='ALL'){filters.push('i.status=?');params.push(status);}
     if(finance_type!=='ALL'){filters.push('l.finance_type=?');params.push(finance_type);}
     if(start_date){filters.push('i.due_date>=?');params.push(start_date);}
@@ -229,6 +231,7 @@ function registerManagementRoutes(app, db) {
     if(start_date){where.push("COALESCE(i.paid_date,i.due_date)>=?");params.push(start_date);}
     if(end_date){where.push("COALESCE(i.paid_date,i.due_date)<=?");params.push(end_date);}
     if(finance_type!=='ALL'){where.push('l.finance_type=?');params.push(finance_type);}
+    else if(!isSuper(req) && req.user.allowed_features!=='ALL'){const allowed=req.user.allowed_features.split(',').filter(Boolean);if(allowed.length){where.push('l.finance_type IN ('+allowed.map(()=>'?').join(',')+')');params.push(...allowed);}}
     if(customer_id){where.push('c.id=?');params.push(customer_id);}
     const groupExpr={
       month:"strftime('%Y-%m',COALESCE(i.paid_date,i.due_date))",
