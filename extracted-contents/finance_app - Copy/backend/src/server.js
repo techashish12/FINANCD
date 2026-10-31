@@ -445,7 +445,11 @@ app.post('/api/loans', authenticate, (req, res) => {
   
   const loanCode = `LOAN-${Math.floor(Date.now() / 1000)}`;
 
-  db.serialize(() => {
+  // Never allow a tenant to attach another finance company's customer to its loan.
+  db.get('SELECT id FROM customers WHERE id=? AND tenant_id=?',[customer_id,req.user.tenant_id],(customerErr,customer)=>{
+    if(customerErr) return res.status(500).json({error:customerErr.message});
+    if(!customer) return res.status(404).json({error:'Customer not found in this finance company'});
+    db.serialize(() => {
     db.run('BEGIN TRANSACTION');
 
     db.run(
@@ -474,6 +478,7 @@ app.post('/api/loans', authenticate, (req, res) => {
         });
       }
     );
+    });
   });
 });
 
