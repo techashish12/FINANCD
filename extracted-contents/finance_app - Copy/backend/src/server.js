@@ -913,8 +913,33 @@ app.get('/api/export/upcoming', authenticate, (req, res) => {
     });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running on port ${PORT}`);
+// Complete additive schema migrations before accepting traffic.
+function ensureColumn(table, column, definition) {
+  return new Promise((resolve, reject) => {
+    db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
+      if (err) return reject(err);
+      if (columns.some(item => item.name === column)) return resolve();
+      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, alterErr => alterErr ? reject(alterErr) : resolve());
+    });
+  });
+}
+
+Promise.all([
+  ensureColumn('tenants','email','TEXT'),
+  ensureColumn('tenants','phone','TEXT'),
+  ensureColumn('tenants','contact_person','TEXT'),
+  ensureColumn('tenants','address','TEXT'),
+  ensureColumn('tenants','plan_name',"TEXT DEFAULT 'STANDARD'"),
+  ensureColumn('tenants','created_by','INTEGER'),
+  ensureColumn('users','email','TEXT'),
+  ensureColumn('customers','branch_id','INTEGER'),
+  ensureColumn('loans','branch_id','INTEGER'),
+  ensureColumn('installments','branch_id','INTEGER')
+]).then(() => {
+  app.listen(PORT, '0.0.0.0', () => console.log(`Server is running on port ${PORT}`));
+}).catch(error => {
+  console.error('FINANCD database migration failed; server will not start:', error.message);
+  process.exitCode = 1;
 });
 
 // --- AI MOCK ENDPOINTS FOR DEMO PURPOSES ---
