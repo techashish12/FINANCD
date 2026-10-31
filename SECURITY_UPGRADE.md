@@ -12,6 +12,8 @@ The upgrade branch wires a global API security guard into the existing Express b
 - Password changes require authentication, ownership and current-password verification.
 - Full database backup is Super Admin only.
 - Request-body logging was removed to avoid recording passwords, identity documents and payment details.
+- Login attempts are throttled, sessions expire after 24 hours, production CORS uses an explicit allow-list, JSON request size is limited, and basic response security headers are set.
+- Startup waits for additive SQLite schema migrations before accepting requests.
 - Management routes are protected and audit customer creation, Kist creation, payments and administrative changes.
 
 ## Configure the backend
@@ -21,6 +23,8 @@ Create `backend/.env` (never commit it):
 ```env
 PORT=3000
 JWT_SECRET=your_unique_random_secret_at_least_32_characters
+NODE_ENV=production
+CORS_ORIGIN=https://your-frontend-domain.example
 ```
 
 Generate a secret:
@@ -55,7 +59,7 @@ For Android emulator, the frontend API base URL uses `10.0.2.2`. For a physical 
 
 1. Back up the SQLite database before testing migrations.
 2. Restrict CORS to the actual app origin and use HTTPS.
-3. Keep `.env`, database files and backup files out of Git.
+3. Set `CORS_ORIGIN` to the exact browser frontend origin in production; leave native mobile clients originless. Keep `.env`, database files and backup files out of Git.
 4. Provision Super Admin accounts only through a trusted one-time bootstrap process.
 5. Complete branch-level filtering in all existing customer, Kist, collection and export queries before multi-branch production use.
 6. Complete PDF receipt printing/sharing and verify automatic receipt records.
