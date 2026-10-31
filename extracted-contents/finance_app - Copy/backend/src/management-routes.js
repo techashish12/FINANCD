@@ -178,7 +178,6 @@ function registerManagementRoutes(app, db) {
   ];
 
   router.get('/features', (req,res) => {
-    if(!isAdmin(req)) return res.status(403).json({error:'Admin permission required'});
     if(isSuper(req)) return res.json({allowed_features:SUPPORTED_FINANCE_TYPES,all:true});
     db.get('SELECT allowed_features FROM tenants WHERE id=?',[req.user.tenant_id],(err,row)=>{
       if(err) return res.status(500).json({error:err.message});
