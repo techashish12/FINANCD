@@ -664,14 +664,16 @@ app.get('/api/dashboard', authenticate, (req, res) => {
             paramsDue.push(startDate, endDate);
         }
         
-        let typeParamPaid = [...paramsPaid];
-        let typeParamDue = [...paramsDue];
-
+        const typeParams = [];
         if (financeType && financeType !== 'ALL') {
             typeFilter = ` AND l.finance_type = ?`;
-            typeParamPaid.push(financeType);
-            typeParamDue.push(financeType);
+            typeParams.push(financeType);
+        } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+            const allowed = req.user.allowed_features.split(',').filter(Boolean);
+            if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; typeParams.push(...allowed); }
         }
+        const typeParamPaid = [...paramsPaid, ...typeParams];
+        const typeParamDue = [...paramsDue, ...typeParams];
 
         const currentMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
         
@@ -681,8 +683,8 @@ app.get('/api/dashboard', authenticate, (req, res) => {
             totalDelayed: { q: `SELECT SUM(i.amount) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'DELAYED' ${dateFilterDue} ${typeFilter}`, p: typeParamDue },
             totalLateFees: { q: `SELECT SUM(i.late_fee) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' ${dateFilterPaid} ${typeFilter}`, p: typeParamPaid },
             delayedInstallmentsCount: { q: `SELECT COUNT(*) as count FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'DELAYED' ${dateFilterDue} ${typeFilter}`, p: typeParamDue },
-            thisMonthCollection: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND i.paid_date >= ? ${typeFilter}`, p: typeFilter ? [tenantId, currentMonthStart, financeType] : [tenantId, currentMonthStart] },
-            totalCustomersCount: { q: `SELECT COUNT(DISTINCT c.id) as count FROM customers c LEFT JOIN loans l ON c.id = l.customer_id WHERE c.tenant_id = ? ${typeFilter ? 'AND l.finance_type = ?' : ''}`, p: typeFilter ? [tenantId, financeType] : [tenantId] },
+            thisMonthCollection: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND i.paid_date >= ? ${typeFilter}`, p: [tenantId, currentMonthStart, ...typeParams] },
+            totalCustomersCount: { q: `SELECT COUNT(DISTINCT c.id) as count FROM customers c LEFT JOIN loans l ON c.id = l.customer_id WHERE c.tenant_id = ? ${typeFilter}`, p: [tenantId, ...typeParams] },
             totalCash: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND (UPPER(i.payment_method) = 'CASH' OR i.payment_method IS NULL OR i.payment_method = '') ${dateFilterPaid} ${typeFilter}`, p: typeParamPaid },
             totalOnline: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND UPPER(i.payment_method) = 'ONLINE' ${dateFilterPaid} ${typeFilter}`, p: typeParamPaid }
         };
