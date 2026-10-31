@@ -203,14 +203,20 @@ export default function DashboardScreen() {
               )}
 
               <View style={{flexDirection: 'row', gap: 10, marginTop: 8}}>
-                  <TouchableOpacity onPress={() => Linking.openURL(`tel:+91${item.customer_phone}`)}>
+                  <TouchableOpacity onPress={() => {
+                      const phone = String(item.customer_phone || '').replace(/\\D/g, '').replace(/^91(?=\\d{10}$)/, '');
+                      if(phone.length < 10) return universalAlert('Missing phone','Customer phone number is invalid.',[]);
+                      Linking.openURL(`tel:+91${phone}`);
+                  }}>
                       <Text style={{color: '#3498db', fontWeight: 'bold'}}>📞 Call</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => {
+                      const phone = String(item.customer_phone || '').replace(/\\D/g, '').replace(/^91(?=\\d{10}$)/, '');
+                      if(phone.length < 10) return universalAlert('Missing phone','Customer phone number is invalid.',[]);
                       const msg = `Hello ${item.customer_name}, your ${item.finance_type} installment of ₹${item.amount} is due on ${item.due_date}. Regards, ${companyName}`;
-                      const url = Platform.OS === 'web' 
-                          ? `https://wa.me/91${item.customer_phone}?text=${encodeURIComponent(msg)}`
-                          : `whatsapp://send?phone=+91${item.customer_phone}&text=${encodeURIComponent(msg)}`;
+                      const url = Platform.OS === 'web'
+                          ? `https://wa.me/91${phone}?text=${encodeURIComponent(msg)}`
+                          : `whatsapp://send?phone=91${phone}&text=${encodeURIComponent(msg)}`;
                       Linking.openURL(url);
                   }}>
                       <Text style={{color: '#25D366', fontWeight: 'bold'}}>💬 WhatsApp</Text>
