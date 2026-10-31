@@ -100,6 +100,23 @@ function registerManagementRoutes(app, db) {
            COALESCE(NEW.payment_method,'CASH'),
            COALESCE(NEW.paid_date,date('now')));
       END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS trg_financd_audit_customer_insert
+      AFTER INSERT ON customers BEGIN
+        INSERT INTO audit_logs(tenant_id,actor_username,action,entity_type,entity_id,details)
+        VALUES(NEW.tenant_id,'SYSTEM_DB_TRIGGER','CUSTOMER_CREATED','customer',NEW.id,'{}');
+      END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS trg_financd_audit_loan_insert
+      AFTER INSERT ON loans BEGIN
+        INSERT INTO audit_logs(tenant_id,actor_username,action,entity_type,entity_id,details)
+        VALUES(NEW.tenant_id,'SYSTEM_DB_TRIGGER','KIST_CREATED','loan',NEW.id,'{}');
+      END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS trg_financd_audit_installment_paid
+      AFTER UPDATE OF status ON installments
+      WHEN NEW.status='PAID' AND OLD.status<>'PAID' BEGIN
+        INSERT INTO audit_logs(tenant_id,actor_username,action,entity_type,entity_id,details)
+        VALUES(NEW.tenant_id,'SYSTEM_DB_TRIGGER','PAYMENT_COLLECTED','installment',NEW.id,
+          '{"amount":' || (COALESCE(NEW.amount,0)+COALESCE(NEW.late_fee,0)+COALESCE(NEW.other_charges,0)) || '}');
+      END`);
   });
 
   function authenticate(req, res, next) {
