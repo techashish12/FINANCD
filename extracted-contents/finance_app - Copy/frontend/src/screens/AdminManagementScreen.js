@@ -47,7 +47,7 @@ export default function AdminManagementScreen() {
       const [o,b,s,e,f,a] = await Promise.all([
         api.get('/manage/overview'), api.get('/manage/branches'),
         api.get('/manage/staff'), api.get('/manage/expenses'),
-        api.get('/manage/reports/financial')
+        api.get('/manage/reports/financial'), api.get('/manage/audit')
       ]);
       setOverview(o.data); setBranches(b.data); setStaff(s.data); setExpenses(e.data); setFinancial(f.data); setAudit(a.data);
     } catch (error) {
