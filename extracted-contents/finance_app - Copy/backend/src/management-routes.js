@@ -72,36 +72,6 @@ function registerManagementRoutes(app, db) {
       setting_value TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
-    // Optional business profile fields for finance-company onboarding.
-    const addTenantColumn = (column, definition) => db.all('PRAGMA table_info(tenants)', [], (err, columns) => {
-      if (err) return console.error('Tenant schema check failed:', err.message);
-      if (!columns.some(col => col.name === column)) db.run(`ALTER TABLE tenants ADD COLUMN ${column} ${definition}`, e => e && console.error('Tenant schema update failed:', e.message));
-    });
-    addTenantColumn('email', 'TEXT');
-    addTenantColumn('phone', 'TEXT');
-    addTenantColumn('contact_person', 'TEXT');
-    addTenantColumn('address', 'TEXT');
-    addTenantColumn('plan_name', "TEXT DEFAULT 'STANDARD'");
-    addTenantColumn('created_by', 'INTEGER');
-    db.all('PRAGMA table_info(users)', [], (err, columns) => {
-      if (err) return console.error('User schema check failed:', err.message);
-      if (!columns.some(col => col.name === 'email')) db.run('ALTER TABLE users ADD COLUMN email TEXT', e => e && console.error('User schema update failed:', e.message));
-    });
-    // Assignable branch links for existing customer/loan/collection records.
-    const addColumnIfMissing = (table, column, definition) => {
-      db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
-        if (err) return console.error('Schema check failed:', err.message);
-        if (!columns.some(col => col.name === column)) {
-          db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, alterErr => {
-            if (alterErr) console.error('Schema update failed:', alterErr.message);
-          });
-        }
-      });
-    };
-    addColumnIfMissing('customers', 'branch_id', 'INTEGER');
-    addColumnIfMissing('loans', 'branch_id', 'INTEGER');
-    addColumnIfMissing('installments', 'branch_id', 'INTEGER');
-    db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_receipt_installment ON payment_receipts(installment_id)');
     // Automatically issue one immutable receipt whenever a payment first becomes PAID.
     db.run(`CREATE TRIGGER IF NOT EXISTS trg_financd_auto_receipt
       AFTER UPDATE OF status ON installments
