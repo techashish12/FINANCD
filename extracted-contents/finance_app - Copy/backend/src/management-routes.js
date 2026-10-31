@@ -212,7 +212,6 @@ function registerManagementRoutes(app, db) {
     if(finance_type!=='ALL') { filters.push('l.finance_type=?'); params.push(finance_type); }
     else if(!isSuper(req) && req.user.allowed_features!=='ALL') { const allowed=req.user.allowed_features.split(',').filter(Boolean); if(allowed.length){filters.push('l.finance_type IN ('+allowed.map(()=>'?').join(',')+')');params.push(...allowed);} }
     if(status!=='ALL'){filters.push('i.status=?');params.push(status);}
-    if(finance_type!=='ALL'){filters.push('l.finance_type=?');params.push(finance_type);}
     if(start_date){filters.push('i.due_date>=?');params.push(start_date);}
     if(end_date){filters.push('i.due_date<=?');params.push(end_date);}
     if(customer_id){filters.push('l.customer_id=?');params.push(customer_id);}
