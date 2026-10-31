@@ -799,6 +799,9 @@ app.get('/api/installments/upcoming', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         typeFilter = ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
 
     const query = `
