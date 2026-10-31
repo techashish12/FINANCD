@@ -108,21 +108,28 @@ export default function AddFinanceScreen() {
         return universalAlert('Error', 'Provide Installment Amount or Number of Installments', []);
     }
 
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(instAmt) || instAmt <= 0 || !Number.isInteger(totalInstCount) || totalInstCount < 1 || totalInstCount > 600) {
+      return universalAlert('Invalid Kist schedule', 'Enter a positive finance amount and a valid Kist amount or count (maximum 600 Kist).', []);
+    }
+    const finalInstallment = Number((total - instAmt * (totalInstCount - 1)).toFixed(2));
+    if (finalInstallment <= 0) {
+      return universalAlert('Kist total does not match', 'The Kist amount and count exceed the finance amount. Reduce the Kist amount or count.', []);
+    }
+
+    setInstallmentAmount(String(instAmt));
+    setTotalInstallments(String(totalInstCount));
     let generated = [];
     let currentDate = new Date(startDateObj);
     const valToAdd = parseInt(intervalValue, 10) || 1;
 
     for (let i = 0; i < totalInstCount; i++) {
-        const amountForThisInst = (i === totalInstCount - 1 && (total % instAmt !== 0)) 
-            ? (total % instAmt) 
-            : instAmt;
-
+        const amountForThisInst = i === totalInstCount - 1 ? finalInstallment : instAmt;
         generated.push({
             id: i.toString(),
             amount: amountForThisInst,
             due_date: format(currentDate, 'yyyy-MM-dd')
         });
-        
+
         // Intelligent date addition
         if (intervalType === 'Days') {
             currentDate = addDays(currentDate, valToAdd);
