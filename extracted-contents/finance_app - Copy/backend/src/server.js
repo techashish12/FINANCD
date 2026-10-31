@@ -15,6 +15,10 @@ const JWT_SECRET = process.env.JWT_SECRET || 'fintrack_super_secret_key_123';
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+// Enforce a verified current database identity for every API route (except login).
+const { installSecurityGuards } = require('./security-guards');
+installSecurityGuards(app, { db, bcrypt, jwt });
+
 // Additive branch, staff, finance, audit and receipt APIs.
 const { registerManagementRoutes } = require('./management-routes');
 registerManagementRoutes(app, db);
