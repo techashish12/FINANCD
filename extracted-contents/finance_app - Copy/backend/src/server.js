@@ -559,11 +559,11 @@ app.post('/api/loans/:id/mark-all-paid', authenticate, (req, res) => {
 });
 
 // Edit a specific installment (unpaid) directly (amount or due_date)
-app.put('/api/installments/:id', (req, res) => {
+app.put('/api/installments/:id', authenticate, (req, res) => {
     const { amount, due_date } = req.body;
     db.run(
-        `UPDATE installments SET amount = ?, due_date = ? WHERE id = ?`,
-        [amount, due_date, req.params.id],
+        `UPDATE installments SET amount = ?, due_date = ? WHERE id = ? AND tenant_id = ?`,
+        [amount, due_date, req.params.id, req.user.tenant_id],
         function(err) {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ message: 'Installment modified' });
@@ -694,14 +694,14 @@ app.get('/api/dashboard', authenticate, (req, res) => {
 });
 
 // Get Action Needed Installments (Today & Delayed) with optional date & type filtering
-app.get('/api/installments/action-needed', (req, res) => {
+app.get('/api/installments/action-needed', authenticate, (req, res) => {
     const { startDate, endDate, financeType } = req.query;
     const today = new Date().toISOString().split('T')[0];
     
-    db.run(`UPDATE installments SET status = 'DELAYED' WHERE status = 'UNPAID' AND due_date < ?`, [today], (err) => {
+    db.run(`UPDATE installments SET status = 'DELAYED' WHERE status = 'UNPAID' AND due_date < ? AND tenant_id = ?`, [today, req.user.tenant_id], (err) => {
         let dateFilter = "";
         let typeFilter = "";
-        let params = [today];
+        let params = [req.user.tenant_id, today];
 
         if (startDate && endDate) {
             dateFilter = ` AND i.due_date BETWEEN ? AND ?`;
@@ -718,7 +718,7 @@ app.get('/api/installments/action-needed', (req, res) => {
             FROM installments i
             JOIN loans l ON i.loan_id = l.id
             JOIN customers c ON l.customer_id = c.id
-            WHERE l.status != 'DEFAULTER' AND (i.status = 'DELAYED' OR (i.status = 'UNPAID' AND i.due_date = ?)) ${dateFilter} ${typeFilter}
+            WHERE i.tenant_id = ? AND l.status != 'DEFAULTER' AND (i.status = 'DELAYED' OR (i.status = 'UNPAID' AND i.due_date = ?)) ${dateFilter} ${typeFilter}
             ORDER BY i.due_date ASC
         `;
         db.all(query, params, (err, rows) => {
@@ -769,14 +769,14 @@ app.get('/api/installments/upcoming', authenticate, (req, res) => {
 });
 
 // Export: All Customers (JSON format for mobile frontend to convert to CSV)
-app.get('/api/export/customers', (req, res) => {
+app.get('/api/export/customers', authenticate, (req, res) => {
     const { financeType } = req.query;
     let query = `SELECT c.book_number, c.name, c.phone, c.address, l.finance_type, l.total_finance_amount, l.status as loan_status 
-            FROM customers c LEFT JOIN loans l ON c.id = l.customer_id`;
-    let params = [];
+            FROM customers c LEFT JOIN loans l ON c.id = l.customer_id AND l.tenant_id = c.tenant_id WHERE c.tenant_id = ?`;
+    let params = [req.user.tenant_id];
     
     if (financeType && financeType !== 'ALL') {
-        query += ` WHERE l.finance_type = ?`;
+        query += ` AND l.finance_type = ?`;
         params.push(financeType);
     }
             
@@ -824,22 +824,22 @@ app.get('/api/installments/collections', authenticate, (req, res) => {
 });
 
 // Export: Specific Customer History (JSON)
-app.get('/api/export/customer/:id', (req, res) => {
+app.get('/api/export/customer/:id', authenticate, (req, res) => {
     const query = `
         SELECT i.due_date as Due_Date, i.amount as Base_Amount, i.late_fee as Late_Fees, i.other_charges as Other_Charges, i.status as Status, i.payment_method as Method, i.paid_date as Paid_Date
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
-        WHERE l.customer_id = ?
+        WHERE l.customer_id = ? AND l.tenant_id = ?
         ORDER BY i.due_date ASC
     `;
-    db.all(query, [req.params.id], (err, rows) => {
+    db.all(query, [req.params.id, req.user.tenant_id], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows);
     });
 });
 
 // Export: Upcoming Installments (JSON format for mobile frontend to convert to CSV)
-app.get('/api/export/upcoming', (req, res) => {
+app.get('/api/export/upcoming', authenticate, (req, res) => {
     const { startDate, endDate, financeType } = req.query;
     const today = new Date().toISOString().split('T')[0];
     
@@ -848,9 +848,9 @@ app.get('/api/export/upcoming', (req, res) => {
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id
-        WHERE i.status != 'PAID' AND i.due_date >= ?
+        WHERE i.tenant_id = ? AND i.status != 'PAID' AND i.due_date >= ?
     `;
-    let params = [today];
+    let params = [req.user.tenant_id, today];
     
     if (startDate && endDate) {
         query += ` AND i.due_date BETWEEN ? AND ?`;
