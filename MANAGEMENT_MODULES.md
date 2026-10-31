@@ -1,36 +1,43 @@
 # FINANCD Management Modules
 
-This release adds an additive management API to the existing Expo/Express/SQLite application.
+The management module is wired into the backend and exposed in the Expo navigation on the `feature/security-and-admin-upgrade` branch. It extends the existing Expo / React Native, Express and SQLite application.
 
-## Included endpoints
+## Included features
 
-All routes are under `/api/manage` and require a Bearer token.
+- Super Admin and Admin management overview with organization, customer, Kist/loan, collections, outstanding and overdue totals.
+- Branch creation, listing and activation/deactivation.
+- Staff creation, role assignment and branch-level permission records (collect, manage customers, view reports).
+- Expense entry and cashflow-style net result reporting.
+- Receipt records automatically created when an installment first changes to `PAID`.
+- Audit trail for customer creation, Kist creation, payments and management actions.
+- Super Admin-only SQLite database backup endpoint.
+- Responsive management screen for mobile and web.
+
+## API
+
+All management routes are under `/api/manage` and require a valid Bearer token.
 
 | Area | Routes |
 |---|---|
-| Super Admin / Admin overview | `GET /overview` |
+| Overview | `GET /overview` |
 | Branches | `GET /branches`, `POST /branches`, `PATCH /branches/:id` |
 | Staff | `GET /staff`, `POST /staff`, `PATCH /staff/:id` |
 | Staff branch permissions | `GET /staff/:id/permissions`, `PUT /staff/:id/permissions` |
 | Expenses | `GET /expenses`, `POST /expenses` |
 | Financial analytics | `GET /reports/financial?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` |
 | Audit trail | `GET /audit` |
-| Payment receipts | `POST /receipts` with `{ "installment_id": 123 }` |
-| Full SQLite backup | `GET /backup` (Super Admin only) |
+| Receipts | `POST /receipts` with `{ "installment_id": 123 }` |
+| Database backup | `GET /backup` (Super Admin only) |
 
-## Activate the module
+## Setup
 
-1. Set a unique `JWT_SECRET` of at least 32 characters in `backend/.env`.
-2. In `backend/src/server.js`, after `app.use(express.json(...))` and before `app.listen(...)`, add:
+1. In `backend/.env`, set `JWT_SECRET` to a unique random secret (at least 32 characters). Generate one with:
+   `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
+2. Do not use the placeholder in `.env.example`.
+3. The management router and global API security guard are already wired into `backend/src/server.js`; no manual registration step is needed.
+4. The new tables and branch columns are created additively at startup. Existing customer, loan and installment data is not dropped.
 
-```js
-const { registerManagementRoutes } = require('./management-routes');
-registerManagementRoutes(app, db);
-```
-
-3. Restart the backend. The new additive tables are created automatically. Existing finance/customer/payment tables are not dropped.
-
-## Start locally
+## Run locally
 
 Backend:
 
@@ -40,7 +47,7 @@ npm install
 npm start
 ```
 
-Expo app (second terminal):
+Expo frontend (second terminal):
 
 ```bash
 cd frontend
@@ -48,14 +55,12 @@ npm install
 npx expo start
 ```
 
-For a physical phone, set the API host in `frontend/src/api/index.js` to your computer's LAN IP. Android emulator uses `10.0.2.2`; web/iOS simulator may use `127.0.0.1`.
+For a physical phone, change the API host in `frontend/src/api/index.js` to your computer's LAN IP. Android emulator uses `10.0.2.2`; web/iOS simulator may use `127.0.0.1`.
 
-## Notes and safeguards
+## Important limitations before production
 
-- Admin can manage their tenant's staff, branches, expenses, and reports. Super Admin can view and manage across tenants.
-- Staff permissions are branch-level flags for collections, customer management, and report visibility.
-- Receipt endpoint creates an immutable receipt record for an already-paid installment. A UI can render/share/print its returned data.
-- Profit/loss shown here is **cash collections minus recorded operating expenses**; it is not statutory accounting profit and excludes principal/revenue recognition rules.
-- Backups are restricted to Super Admin and are intended for local SQLite deployments. Cloud deployments should use managed database snapshots.
-- The existing app still contains older routes with inconsistent authentication/tenant filters. Do not expose the existing backend publicly until those legacy routes have been audited and protected.
-- This module has not been executed against a live copy of your database in this environment. Test on a backup before production use.
+- Existing Kist/customer/payment screens have not yet been fully converted to require branch selection or filter every record by branch. Branch permissions are stored and management endpoints are protected, but full branch-level row isolation still needs to be applied to the legacy finance endpoints.
+- Profit/loss is currently a cash-collections-minus-recorded-expenses indicator, not statutory accounting profit or audited financial statements.
+- Backup endpoint supports local SQLite. Cloud deployments need managed database snapshots.
+- Automatic receipt generation is stored in the database. The receipt endpoint returns receipt/customer data; printing and PDF/share UI still needs to be completed.
+- No live database migration or mobile build was run in this environment. Back up your data and test on a development copy before using real customer records.
