@@ -97,6 +97,7 @@ function registerManagementRoutes(app, db) {
     addColumnIfMissing('customers', 'branch_id', 'INTEGER');
     addColumnIfMissing('loans', 'branch_id', 'INTEGER');
     addColumnIfMissing('installments', 'branch_id', 'INTEGER');
+    db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_receipt_installment ON payment_receipts(installment_id)');
     // Automatically issue one immutable receipt whenever a payment first becomes PAID.
     db.run(`CREATE TRIGGER IF NOT EXISTS trg_financd_auto_receipt
       AFTER UPDATE OF status ON installments
