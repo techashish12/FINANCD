@@ -347,16 +347,21 @@ function registerManagementRoutes(app, db) {
     db.get(`SELECT i.*,c.name customer_name,c.phone,l.loan_code FROM installments i JOIN loans l ON l.id=i.loan_id JOIN customers c ON c.id=l.customer_id WHERE i.id=? AND i.status='PAID' ${tenantId?'AND i.tenant_id=?':''}`,tenantId?[installment_id,tenantId]:[installment_id],(err,row)=>{
       if(err) return res.status(500).json({error:err.message});
       if(!row) return res.status(404).json({error:'Paid installment not found'});
-      const receiptNumber='RCPT-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+String(row.id).padStart(6,'0');
-      db.run('INSERT OR IGNORE INTO payment_receipts (tenant_id,installment_id,receipt_number,amount,payment_method,paid_date,created_by) VALUES (?,?,?,?,?,?,?)',
-        [row.tenant_id,row.id,receiptNumber,Number(row.amount)+Number(row.late_fee||0)+Number(row.other_charges||0),row.payment_method || 'CASH',row.paid_date,req.user.id],function(e){
-          if(e) return res.status(500).json({error:e.message});
-          db.get('SELECT * FROM payment_receipts WHERE installment_id=?',[row.id],(getErr,receipt)=>{
-            if(getErr) return res.status(500).json({error:getErr.message});
-            audit(req,'RECEIPT_ISSUED','receipt',receipt.id,{receipt_number:receipt.receipt_number,installment_id:row.id});
-            res.status(201).json({receipt,customer:{name:row.customer_name,phone:row.phone},loan_code:row.loan_code,company_name:'FINANCD'});
+      // The payment-status database trigger normally creates the receipt automatically.
+      db.get('SELECT * FROM payment_receipts WHERE installment_id=?',[row.id],(lookupErr,existing)=>{
+        if(lookupErr) return res.status(500).json({error:lookupErr.message});
+        if(existing) return res.json({receipt:existing,customer:{name:row.customer_name,phone:row.phone},loan_code:row.loan_code,company_name:'FINANCD'});
+        const receiptNumber='RCPT-'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'-'+String(row.id).padStart(6,'0');
+        db.run('INSERT INTO payment_receipts (tenant_id,installment_id,receipt_number,amount,payment_method,paid_date,created_by) VALUES (?,?,?,?,?,?,?)',
+          [row.tenant_id,row.id,receiptNumber,Number(row.amount)+Number(row.late_fee||0)+Number(row.other_charges||0),row.payment_method || 'CASH',row.paid_date,req.user.id],function(e){
+            if(e) return res.status(500).json({error:e.message});
+            db.get('SELECT * FROM payment_receipts WHERE installment_id=?',[row.id],(getErr,receipt)=>{
+              if(getErr) return res.status(500).json({error:getErr.message});
+              audit(req,'RECEIPT_ISSUED','receipt',receipt.id,{receipt_number:receipt.receipt_number,installment_id:row.id});
+              res.status(201).json({receipt,customer:{name:row.customer_name,phone:row.phone},loan_code:row.loan_code,company_name:'FINANCD'});
+            });
           });
-        });
+      });
     });
   });
 
