@@ -100,27 +100,32 @@ app.get('/api/super/tenants', authenticate, (req, res) => {
 
 app.post('/api/super/tenants', authenticate, (req, res) => {
     if (req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Unauthorized' });
-    const { company_name, allowed_features, admin_username, admin_password } = req.body;
-    
-    if (!company_name || !admin_username || !admin_password) return res.status(400).json({ error: 'Missing required fields' });
-
+    const { company_name, email, phone, contact_person, address, plan_name, allowed_features, admin_username, admin_password } = req.body || {};
+    const supported = ['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'];
+    const selected = Array.isArray(allowed_features) ? allowed_features : String(allowed_features || '').split(',');
+    const features = [...new Set(selected.map(x=>String(x).trim()).filter(x=>supported.includes(x)))];
+    if (!company_name || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !admin_username || !admin_password || admin_password.length < 12 || !features.length) {
+      return res.status(400).json({ error: 'Company, valid email, admin username, 12+ character password and at least one finance type are required' });
+    }
+    const hash = bcrypt.hashSync(admin_password, 12);
     db.serialize(() => {
-        db.run('BEGIN TRANSACTION');
-        
-        db.run(`INSERT INTO tenants (company_name, allowed_features) VALUES (?, ?)`, [company_name, allowed_features || 'ALL'], function(err) {
-            if (err) { db.run('ROLLBACK'); return res.status(500).json({ error: err.message }); }
-            
-            const tenantId = this.lastID;
-            const hash = bcrypt.hashSync(admin_password, 10);
-            
-            db.run(`INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, 'ADMIN')`, [tenantId, admin_username, hash], function(err2) {
-                if (err2) { db.run('ROLLBACK'); return res.status(500).json({ error: err2.message }); }
-                
-                db.run(`INSERT INTO settings (tenant_id, company_name) VALUES (?, ?)`, [tenantId, company_name], function(err3) {
-                    if (err3) { db.run('ROLLBACK'); return res.status(500).json({ error: err3.message }); }
-                    
-                    db.run('COMMIT');
-                    res.json({ message: 'Tenant provisioned successfully', tenant_id: tenantId });
+      db.run('BEGIN IMMEDIATE');
+      db.run(`INSERT INTO tenants (company_name,allowed_features,email,phone,contact_person,address,plan_name,created_by)
+        VALUES (?,?,?,?,?,?,?,?)`,
+        [company_name.trim(),features.join(','),email.trim().toLowerCase(),phone || '',contact_person || '',address || '',plan_name || 'STANDARD',req.user.id],
+        function(err) {
+          if(err){db.run('ROLLBACK');return res.status(400).json({error:err.message});}
+          const tenantId=this.lastID;
+          db.run(`INSERT INTO users (tenant_id,username,password,role) VALUES (?,?,?,'ADMIN')`,
+            [tenantId,admin_username.trim(),hash],function(userErr){
+              if(userErr){db.run('ROLLBACK');return res.status(400).json({error:userErr.message});}
+              db.run('INSERT INTO settings (tenant_id,company_name,company_phone) VALUES (?,?,?)',
+                [tenantId,company_name.trim(),phone || ''],function(settingsErr){
+                  if(settingsErr){db.run('ROLLBACK');return res.status(500).json({error:settingsErr.message});}
+                  db.run('COMMIT',commitErr=>{
+                    if(commitErr)return res.status(500).json({error:commitErr.message});
+                    res.status(201).json({message:'Finance company account created',tenant_id:tenantId,admin_username,features});
+                  });
                 });
             });
         });
