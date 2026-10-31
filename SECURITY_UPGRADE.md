@@ -1,82 +1,64 @@
 # FINANCD security and admin upgrade
 
-This upgrade adds a centralized security guard for the existing Express API. The current app already has a basic `SUPER_ADMIN` / `ADMIN` role concept and tenant provisioning; the guard closes several high-risk gaps found during review.
+The upgrade branch wires a global API security guard into the existing Express backend and adds branch, staff, finance, receipt, backup and audit management routes.
 
-## Findings from the current backend
+## Security changes
 
-- The JWT secret falls back to a hard-coded value.
-- User creation accepts caller-supplied roles without a privilege check, allowing privilege escalation.
-- Password change has no authentication or ownership check.
-- Database backup is publicly downloadable.
-- Several payment, installment, export, and dashboard routes omit authentication.
-- Request bodies are logged, which can expose customer and financial information.
-- Some tenant-facing routes rely on tenant IDs from token claims rather than reloading current account state.
+- All `/api/*` endpoints except `POST /api/login` now require a valid Bearer token.
+- Every request reloads the user's current role and tenant from SQLite, rather than trusting stale role claims in the JWT.
+- Inactive organizations are denied access.
+- JWT startup fails unless a unique secret of at least 32 characters is configured.
+- Admin/Staff user creation checks roles and password length; non-Super Admins cannot create Admin or Super Admin users.
+- Password changes require authentication, ownership and current-password verification.
+- Full database backup is Super Admin only.
+- Request-body logging was removed to avoid recording passwords, identity documents and payment details.
+- Management routes are protected and audit customer creation, Kist creation, payments and administrative changes.
 
-## Apply the middleware
-
-In `backend/src/server.js`, immediately after `const app = express();` and before the first route declaration, add:
-
-```js
-const { installSecurityGuards } = require('./security-guards');
-installSecurityGuards(app, { db, bcrypt, jwt });
-```
-
-Do not put this below the route declarations: Express middleware order matters.
-
-The guard:
-- Requires a valid bearer token for all API routes except POST /api/login.
-- Reloads the user and role from the database on each API request.
-- Rejects users whose tenant is inactive.
-- Restricts full database backups to Super Admin.
-- Prevents Admin users from creating other Admins or Super Admins.
-- Prevents self-service password changes for other users and verifies the current password.
-- Requires Admin permission for high-impact configuration and destructive actions.
-
-## Required environment variables
+## Configure the backend
 
 Create `backend/.env` (never commit it):
 
 ```env
 PORT=3000
-JWT_SECRET=replace_with_a_unique_random_secret_at_least_32_characters
+JWT_SECRET=your_unique_random_secret_at_least_32_characters
 ```
 
-Generate a secret with Node:
+Generate a secret:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-Restart all sessions after changing JWT_SECRET because existing tokens will no longer validate.
+Do not use the placeholder in `.env.example`. Changing JWT_SECRET invalidates all existing login sessions.
 
-## Important deployment checklist
+## Run the app
 
-1. Add the middleware at the exact location shown above.
-2. Remove request-body logging from `server.js`; never log passwords, identity documents, payment details, or tokens.
-3. Use HTTPS in production and restrict CORS to the actual frontend origin.
-4. Keep `.env`, SQLite database files, uploaded documents, and backups out of Git.
-5. Create the first Super Admin through a one-time trusted database/bootstrap procedure; do not expose public Super Admin registration.
-6. Back up the database before running migrations or production upgrades.
-7. Test every role against every API route before deployment.
-
-## Run the existing app
-
-The repository has a backend and frontend. From a terminal:
+Backend:
 
 ```bash
-cd "extracted-contents/finance_app - Copy/backend"
+cd backend
 npm install
 npm start
 ```
 
-In a second terminal:
+Frontend (second terminal):
 
 ```bash
-cd "extracted-contents/finance_app - Copy/frontend"
+cd frontend
 npm install
-npm start
+npx expo start
 ```
 
-If `npm start` is not defined in a package's scripts, run `npm run` to see the available scripts and use the documented development script (often `npm run dev`). Configure the frontend API base URL to point to the backend host and port.
+For Android emulator, the frontend API base URL uses `10.0.2.2`. For a physical phone, replace the host in `frontend/src/api/index.js` with the computer's LAN IP address.
 
-This patch is not a production certification. Review the app's database initialization, role bootstrap, tenant scoping, payment transaction handling, and frontend navigation before handling real customer financial data.
+## Pre-production requirements
+
+1. Back up the SQLite database before testing migrations.
+2. Restrict CORS to the actual app origin and use HTTPS.
+3. Keep `.env`, database files and backup files out of Git.
+4. Provision Super Admin accounts only through a trusted one-time bootstrap process.
+5. Complete branch-level filtering in all existing customer, Kist, collection and export queries before multi-branch production use.
+6. Complete PDF receipt printing/sharing and verify automatic receipt records.
+7. Test every role and API route on a non-production database.
+
+This is a development upgrade, not a production certification. The current legacy finance endpoints still require a further branch-scoping review, and this environment has not run a live SQLite migration, backend test suite, or Expo build.
