@@ -188,6 +188,23 @@ function registerManagementRoutes(app, db) {
     });
   });
 
+  router.patch('/loans/:id/account', (req,res) => {
+    if(!isAdmin(req)) return res.status(403).json({error:'Only Admin can change loan account status'});
+    const {status,is_closed}=req.body || {};
+    const allowed=['ACTIVE','DEFAULTER','COMPLETED'];
+    if(status && !allowed.includes(status)) return res.status(400).json({error:'Status must be ACTIVE, DEFAULTER or COMPLETED'});
+    const closed=is_closed===undefined?null:(is_closed?1:0);
+    const scope=isSuper(req)?'':' AND tenant_id=?';
+    const params=[status || null,closed,req.params.id];
+    if(!isSuper(req)) params.push(req.user.tenant_id);
+    db.run(`UPDATE loans SET status=COALESCE(?,status),is_closed=COALESCE(?,is_closed) WHERE id=?${scope}`,params,function(err){
+      if(err) return res.status(500).json({error:err.message});
+      if(!this.changes) return res.status(404).json({error:'Loan account not found'});
+      audit(req,'LOAN_ACCOUNT_UPDATED','loan',req.params.id,{status,is_closed});
+      res.json({message:'Loan account updated',status:status || undefined,is_closed:closed===null?undefined:closed});
+    });
+  });
+
   router.get('/kists', (req,res) => {
     const tenantId=isSuper(req)?Number(req.query.tenant_id):req.user.tenant_id;
     if(!tenantId) return res.status(400).json({error:'Organization is required'});
