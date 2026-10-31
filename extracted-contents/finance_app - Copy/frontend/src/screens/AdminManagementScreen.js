@@ -225,7 +225,7 @@ export default function AdminManagementScreen() {
           </View>
           <Text style={styles.muted}>Finance type: {reportType}</Text>
           <View style={styles.roleRow}>
-            {['ALL','GOLD_LOAN','PERSONAL_LOAN','TWO_WHEELER','FOUR_WHEELER','MORTGAGE'].map(t=><Action key={t} title={t.replace('_',' ')} secondary={reportType!==t} onPress={()=>setReportType(t)}/>)}
+            {['ALL','TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'].map(t=><Action key={t} title={t.replace('_',' ')} secondary={reportType!==t} onPress={()=>setReportType(t)}/>)}
           </View>
           <Action title="Generate report" onPress={loadReport}/>
           {report && <>
