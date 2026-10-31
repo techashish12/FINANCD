@@ -291,10 +291,12 @@ app.get('/api/installments/overdue', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         typeFilter = ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
 
     const query = `
-        SELECT i.*, c.name as customer_name, c.phone as customer_phone, l.loan_code, l.finance_type, l.vehicle_name, l.vehicle_reg_number, l.vendor_name, l.collateral_name, l.collateral_weight 
         SELECT i.*, c.name as customer_name, c.phone as customer_phone, l.loan_code, l.finance_type, l.vehicle_name, l.vehicle_reg_number, l.vendor_name, l.collateral_name, l.collateral_weight 
         FROM installments i 
         JOIN loans l ON i.loan_id = l.id 
@@ -799,7 +801,7 @@ app.get('/api/installments/upcoming', authenticate, (req, res) => {
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id
-        WHERE l.status != 'DEFAULTER' AND i.status = 'UNPAID' AND i.due_date > ? AND i.due_date <= ? ${typeFilter}
+        WHERE i.tenant_id = ? AND l.status != 'DEFAULTER' AND i.status = 'UNPAID' AND i.due_date > ? AND i.due_date <= ? ${typeFilter}
         ORDER BY i.due_date ASC
     `;
     db.all(query, params, (err, rows) => {
@@ -851,6 +853,9 @@ app.get('/api/installments/collections', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         query += ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { query += ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
     
     if (paymentMethod && paymentMethod !== 'ALL') {
