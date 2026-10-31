@@ -20,6 +20,13 @@ export default function AdminManagementScreen() {
   const [overview, setOverview] = useState(null);
   const [branches, setBranches] = useState([]);
   const [audit, setAudit] = useState([]);
+  const [report, setReport] = useState(null);
+  const [reportStart, setReportStart] = useState('');
+  const [reportEnd, setReportEnd] = useState('');
+  const [reportType, setReportType] = useState('ALL');
+  const [reportGroup, setReportGroup] = useState('month');
+  const [reportCustomer, setReportCustomer] = useState('');
+  const [loanId, setLoanId] = useState('');
   const [staff, setStaff] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [financial, setFinancial] = useState(null);
@@ -56,6 +63,26 @@ export default function AdminManagementScreen() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadReport = async () => {
+    try {
+      const params={group_by:reportGroup,finance_type:reportType};
+      if(reportStart) params.start_date=reportStart;
+      if(reportEnd) params.end_date=reportEnd;
+      if(reportCustomer.trim()) params.customer_id=reportCustomer.trim();
+      const response=await api.get('/manage/reports/detail',{params});
+      setReport(response.data);
+    } catch(e) { notify('Report unavailable',e.message); }
+  };
+
+  const updateLoanAccount = async (status,is_closed) => {
+    if(!loanId.trim() || !Number.isInteger(Number(loanId))) return notify('Loan ID required','Enter a valid loan ID.');
+    try {
+      await api.patch('/manage/loans/'+Number(loanId)+'/account',{status,is_closed});
+      notify('Account updated',status==='DEFAULTER'?'Loan marked as defaulter.':status==='COMPLETED'?'Loan marked completed.':'Loan account status changed.');
+      setLoanId('');
+    } catch(e) { notify('Could not update loan',e.message); }
+  };
 
   const createBranch = async () => {
     if (!branchName.trim()) return notify('Missing details','Enter a branch name.');
@@ -175,6 +202,42 @@ export default function AdminManagementScreen() {
           <View style={{height:12}}/>
           <Text style={styles.muted}>Full SQLite backup is restricted to Super Admin.</Text>
           <Action title="Download database backup" secondary onPress={backup}/>
+        </Panel>
+
+        <Panel title="Advanced reports">
+          <Text style={styles.muted}>Filter collections, outstanding Kist, overdue balances and late fees by date, finance product, customer or reporting period.</Text>
+          <Field value={reportStart} onChangeText={setReportStart} placeholder="Start date YYYY-MM-DD"/>
+          <Field value={reportEnd} onChangeText={setReportEnd} placeholder="End date YYYY-MM-DD"/>
+          <Field value={reportCustomer} onChangeText={setReportCustomer} placeholder="Customer ID (optional)" keyboardType="numeric"/>
+          <Text style={styles.muted}>Group report by</Text>
+          <View style={styles.roleRow}>
+            {['month','year','customer','finance_type'].map(g=><Action key={g} title={g.replace('_',' ')} secondary={reportGroup!==g} onPress={()=>setReportGroup(g)}/>)}
+          </View>
+          <Text style={styles.muted}>Finance type: {reportType}</Text>
+          <View style={styles.roleRow}>
+            {['ALL','GOLD_LOAN','PERSONAL_LOAN','TWO_WHEELER','FOUR_WHEELER','MORTGAGE'].map(t=><Action key={t} title={t.replace('_',' ')} secondary={reportType!==t} onPress={()=>setReportType(t)}/>)}
+          </View>
+          <Action title="Generate report" onPress={loadReport}/>
+          {report && <>
+            <View style={styles.financeRow}><Text style={styles.muted}>Collected</Text><Text style={styles.amount}>{money(report.totals?.collected)}</Text></View>
+            <View style={styles.financeRow}><Text style={styles.muted}>Outstanding</Text><Text style={styles.amount}>{money(report.totals?.outstanding)}</Text></View>
+            <View style={styles.financeRow}><Text style={styles.muted}>Overdue</Text><Text style={styles.amount}>{money(report.totals?.overdue)}</Text></View>
+            <View style={styles.financeRow}><Text style={styles.muted}>Late fees</Text><Text style={styles.amount}>{money(report.totals?.late_fees)}</Text></View>
+            {report.rows?.slice(0,30).map((r,i)=><View key={String(r.report_key)+i} style={styles.row}>
+              <View style={{flex:1}}><Text style={styles.rowTitle}>{r.report_key} {r.customer_name ? '· '+r.customer_name : ''}</Text><Text style={styles.muted}>{r.finance_type || ''} · {r.installment_count} Kist</Text></View>
+              <View><Text style={styles.amount}>{money(r.collected)}</Text><Text style={styles.muted}>Due {money(r.outstanding)}</Text></View>
+            </View>)}
+          </>}
+        </Panel>
+
+        <Panel title="Kist account controls">
+          <Text style={styles.muted}>Mark an account as a defaulter, close a fully settled account or reactivate it. This changes loan status; it does not delete payment history.</Text>
+          <Field value={loanId} onChangeText={setLoanId} placeholder="Loan / Kist account ID" keyboardType="numeric"/>
+          <View style={styles.roleRow}>
+            <Action title="Mark defaulter" onPress={()=>updateLoanAccount('DEFAULTER',false)}/>
+            <Action title="Close account" secondary onPress={()=>updateLoanAccount('COMPLETED',true)}/>
+            <Action title="Reactivate" secondary onPress={()=>updateLoanAccount('ACTIVE',false)}/>
+          </View>
         </Panel>
 
         <Panel title="Recent audit activity">
