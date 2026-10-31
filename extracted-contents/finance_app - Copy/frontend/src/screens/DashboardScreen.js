@@ -56,6 +56,7 @@ export default function DashboardScreen() {
   const [selectedInst, setSelectedInst] = useState(null);
   const [modalAmount, setModalAmount] = useState('');
   const [modalLateFee, setModalLateFee] = useState('');
+  const [autoLateFee, setAutoLateFee] = useState(true);
   const [modalOtherCharges, setModalOtherCharges] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [paidDateObj, setPaidDateObj] = useState(new Date());
@@ -116,6 +117,7 @@ export default function DashboardScreen() {
       setSelectedInst(inst);
       setModalAmount(inst.amount.toString());
       setModalLateFee('0');
+      setAutoLateFee(true);
       setModalOtherCharges('0');
       setPaymentMethod('CASH');
       setPaidDateObj(new Date());
@@ -129,7 +131,7 @@ export default function DashboardScreen() {
               selectedInst.id, 
               'PAID', 
               parseFloat(modalAmount) || selectedInst.amount, 
-              parseFloat(modalLateFee) || 0, 
+              autoLateFee ? undefined : (parseFloat(modalLateFee) || 0), 
               parseFloat(modalOtherCharges) || 0,
               paymentMethod,
               pdStr
@@ -444,7 +446,17 @@ export default function DashboardScreen() {
                   <TextInput style={styles.modalInput} value={modalAmount} onChangeText={setModalAmount} keyboardType="numeric" />
                   
                   <Text style={styles.modalLabel}>Late Fees</Text>
-                  <TextInput style={styles.modalInput} value={modalLateFee} onChangeText={setModalLateFee} keyboardType="numeric" />
+                  <View style={{flexDirection:'row',gap:8,marginBottom:8}}>
+                    <TouchableOpacity style={[styles.typeBtn,autoLateFee&&styles.typeBtnActive]} onPress={()=>setAutoLateFee(true)}>
+                      <Text style={[styles.typeBtnText,autoLateFee&&{color:'#fff'}]}>Auto calculate</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.typeBtn,!autoLateFee&&styles.typeBtnActive]} onPress={()=>setAutoLateFee(false)}>
+                      <Text style={[styles.typeBtnText,!autoLateFee&&{color:'#fff'}]}>Manual amount</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {autoLateFee ? <Text style={{fontSize:12,color:'#667085',marginBottom:10}}>Calculated from days overdue and the finance account's late-fee rule. You can switch to manual entry.</Text> : (
+                    <TextInput style={styles.modalInput} value={modalLateFee} onChangeText={setModalLateFee} keyboardType="numeric" />
+                  )}
 
                   <Text style={styles.modalLabel}>Other Charges</Text>
                   <TextInput style={styles.modalInput} value={modalOtherCharges} onChangeText={setModalOtherCharges} keyboardType="numeric" />
