@@ -23,12 +23,9 @@ installSecurityGuards(app, { db, bcrypt, jwt });
 const { registerManagementRoutes } = require('./management-routes');
 registerManagementRoutes(app, db);
 
-// Verbose Logging Middleware
+// Request logging deliberately excludes request bodies, credentials and personal data.
 app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
-        console.log('Body:', req.body);
-    }
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
     next();
 });
 
