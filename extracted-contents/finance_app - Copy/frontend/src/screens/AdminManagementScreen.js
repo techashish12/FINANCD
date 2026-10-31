@@ -19,14 +19,22 @@ export default function AdminManagementScreen() {
   const [loading, setLoading] = useState(true);
   const [overview, setOverview] = useState(null);
   const [branches, setBranches] = useState([]);
+  const [audit, setAudit] = useState([]);
   const [staff, setStaff] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [financial, setFinancial] = useState(null);
   const [branchName, setBranchName] = useState('');
   const [branchCode, setBranchCode] = useState('');
+  const [branchTenant, setBranchTenant] = useState('');
   const [staffName, setStaffName] = useState('');
   const [staffPassword, setStaffPassword] = useState('');
   const [staffRole, setStaffRole] = useState('AGENT');
+  const [staffTenant, setStaffTenant] = useState('');
+  const [permissionStaff, setPermissionStaff] = useState('');
+  const [permissionBranch, setPermissionBranch] = useState('');
+  const [canCollect, setCanCollect] = useState(true);
+  const [canCustomers, setCanCustomers] = useState(false);
+  const [canReports, setCanReports] = useState(false);
   const [expenseCategory, setExpenseCategory] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0,10));
@@ -36,12 +44,12 @@ export default function AdminManagementScreen() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [o,b,s,e,f] = await Promise.all([
+      const [o,b,s,e,f,a] = await Promise.all([
         api.get('/manage/overview'), api.get('/manage/branches'),
         api.get('/manage/staff'), api.get('/manage/expenses'),
         api.get('/manage/reports/financial')
       ]);
-      setOverview(o.data); setBranches(b.data); setStaff(s.data); setExpenses(e.data); setFinancial(f.data);
+      setOverview(o.data); setBranches(b.data); setStaff(s.data); setExpenses(e.data); setFinancial(f.data); setAudit(a.data);
     } catch (error) {
       notify('Management data unavailable', error.message || 'Please check your account permissions and backend connection.');
     } finally { setLoading(false); }
@@ -52,17 +60,28 @@ export default function AdminManagementScreen() {
   const createBranch = async () => {
     if (!branchName.trim()) return notify('Missing details','Enter a branch name.');
     try {
-      await api.post('/manage/branches',{name:branchName.trim(),code:branchCode.trim()});
-      setBranchName(''); setBranchCode(''); await load(); notify('Saved','Branch created.');
+      await api.post('/manage/branches',{name:branchName.trim(),code:branchCode.trim(),tenant_id:branchTenant ? Number(branchTenant) : undefined});
+      setBranchName(''); setBranchCode(''); setBranchTenant(''); await load(); notify('Saved','Branch created.');
     } catch(e) { notify('Could not create branch',e.message); }
   };
 
   const createStaff = async () => {
     if (!staffName.trim() || staffPassword.length < 12) return notify('Check details','Enter a username and a password of at least 12 characters.');
     try {
-      await api.post('/manage/staff',{username:staffName.trim(),password:staffPassword,role:staffRole});
-      setStaffName(''); setStaffPassword(''); await load(); notify('Saved','Staff account created.');
+      await api.post('/manage/staff',{username:staffName.trim(),password:staffPassword,role:staffRole,tenant_id:staffTenant ? Number(staffTenant) : undefined});
+      setStaffName(''); setStaffPassword(''); setStaffTenant(''); await load(); notify('Saved','Staff account created.');
     } catch(e) { notify('Could not create staff',e.message); }
+  };
+
+  const savePermissions = async () => {
+    if(!permissionStaff.trim() || !permissionBranch.trim()) return notify('Missing details','Enter a staff ID and branch ID.');
+    try {
+      await api.put('/manage/staff/'+Number(permissionStaff)+'/permissions',{
+        branch_id:Number(permissionBranch),can_collect:canCollect,
+        can_manage_customers:canCustomers,can_view_reports:canReports
+      });
+      notify('Saved','Branch permissions updated.');
+    } catch(e) { notify('Could not save permissions',e.message); }
   };
 
   const createExpense = async () => {
@@ -115,6 +134,7 @@ export default function AdminManagementScreen() {
         <Panel title="Branch management">
           <Field value={branchName} onChangeText={setBranchName} placeholder="Branch name"/>
           <Field value={branchCode} onChangeText={setBranchCode} placeholder="Branch code (optional)"/>
+          <Field value={branchTenant} onChangeText={setBranchTenant} placeholder="Organization / tenant ID (Super Admin)" keyboardType="numeric"/>
           <Action title="Add branch" onPress={createBranch}/>
           {branches.map(b=><View key={b.id} style={styles.row}><View style={{flex:1}}><Text style={styles.rowTitle}>{b.name}</Text><Text style={styles.muted}>{b.code || 'No code'} · {b.company_name || 'Current organization'}</Text></View><Text style={b.is_active ? styles.active : styles.inactive}>{b.is_active ? 'ACTIVE':'DISABLED'}</Text></View>)}
           {!branches.length && <Text style={styles.muted}>No branches added yet.</Text>}
@@ -123,8 +143,15 @@ export default function AdminManagementScreen() {
         <Panel title="Staff & permissions">
           <Field value={staffName} onChangeText={setStaffName} placeholder="Staff username"/>
           <Field value={staffPassword} onChangeText={setStaffPassword} placeholder="Temporary password (12+ characters)"/>
+          <Field value={staffTenant} onChangeText={setStaffTenant} placeholder="Organization / tenant ID (Super Admin)" keyboardType="numeric"/>
           <View style={styles.roleRow}><Action title="Staff / Agent" secondary={staffRole!=='AGENT'} onPress={()=>setStaffRole('AGENT')}/><Action title="Admin" secondary={staffRole!=='ADMIN'} onPress={()=>setStaffRole('ADMIN')}/></View>
-          <Text style={styles.muted}>Only Super Admin can create Admin accounts. Branch permissions can be assigned through the management API.</Text>
+          <Text style={styles.muted}>Only Super Admin can create Admin accounts. Assign branch permissions below.</Text>
+          <Field value={permissionStaff} onChangeText={setPermissionStaff} placeholder="Staff user ID" keyboardType="numeric"/>
+          <Field value={permissionBranch} onChangeText={setPermissionBranch} placeholder="Branch ID" keyboardType="numeric"/>
+          <View style={styles.permissionRow}><Text style={styles.muted}>Collect payments</Text><Action title={canCollect?'ON':'OFF'} secondary={!canCollect} onPress={()=>setCanCollect(!canCollect)}/></View>
+          <View style={styles.permissionRow}><Text style={styles.muted}>Manage customers</Text><Action title={canCustomers?'ON':'OFF'} secondary={!canCustomers} onPress={()=>setCanCustomers(!canCustomers)}/></View>
+          <View style={styles.permissionRow}><Text style={styles.muted}>View reports</Text><Action title={canReports?'ON':'OFF'} secondary={!canReports} onPress={()=>setCanReports(!canReports)}/></View>
+          <Action title="Save branch permissions" onPress={savePermissions}/>
           <Action title="Create staff account" onPress={createStaff}/>
           {staff.map(u=><View key={u.id} style={styles.row}><Text style={styles.rowTitle}>{u.username}</Text><Text style={styles.tag}>{u.role}</Text></View>)}
         </Panel>
@@ -148,6 +175,11 @@ export default function AdminManagementScreen() {
           <View style={{height:12}}/>
           <Text style={styles.muted}>Full SQLite backup is restricted to Super Admin.</Text>
           <Action title="Download database backup" secondary onPress={backup}/>
+        </Panel>
+
+        <Panel title="Recent audit activity">
+          {audit.slice(0,8).map(item=><View key={item.id} style={styles.row}><View style={{flex:1}}><Text style={styles.rowTitle}>{item.action}</Text><Text style={styles.muted}>{item.actor_username} · {item.created_at}</Text></View><Text style={styles.tag}>{item.entity_type || 'SYSTEM'}</Text></View>)}
+          {!audit.length && <Text style={styles.muted}>No recorded management actions yet.</Text>}
         </Panel>
 
         <Panel title="Recent operating expenses">
@@ -174,5 +206,5 @@ const styles=StyleSheet.create({
   row:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10,paddingVertical:10,borderBottomWidth:1,borderBottomColor:'#f0f2f6'},
   rowTitle:{fontSize:13,fontWeight:'700',color:'#1d2b45'},active:{fontSize:10,color:'#16845b',fontWeight:'800'},inactive:{fontSize:10,color:'#c43c45',fontWeight:'800'},
   tag:{fontSize:10,fontWeight:'800',color:'#2459d3',backgroundColor:'#eef3ff',padding:6,borderRadius:7},roleRow:{flexDirection:'row',gap:8},financeRow:{flexDirection:'row',justifyContent:'space-between',paddingVertical:7},
-  amount:{fontSize:13,fontWeight:'800',color:'#182640'}
+  amount:{fontSize:13,fontWeight:'800',color:'#182640'},permissionRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:10}
 });
