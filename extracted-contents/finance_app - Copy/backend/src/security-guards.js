@@ -114,6 +114,32 @@ function installSecurityGuards(app, { db, bcrypt, jwt }) {
         return res.status(403).json({ error: 'Admin permission required for this action' });
       }
 
+      // Staff accounts must be explicitly granted the relevant module permission.
+      if (actor.role === 'AGENT') {
+        let permissionColumn = null;
+        if (path.startsWith('/customers') || path.startsWith('/loans')) {
+          permissionColumn = 'can_manage_customers';
+          if (path.includes('/mark-all-paid') || path.endsWith('/status')) permissionColumn = 'can_collect';
+        } else if (path.startsWith('/installments')) {
+          permissionColumn = ['PATCH','PUT'].includes(method) || path.includes('/collections') ? 'can_collect' : 'can_collect';
+        } else if (path.startsWith('/reports') || path === '/dashboard' || path.startsWith('/export')) {
+          permissionColumn = 'can_view_reports';
+        }
+
+        if (permissionColumn) {
+          db.get(
+            `SELECT 1 AS allowed FROM user_branch_access WHERE user_id=? AND ${permissionColumn}=1 LIMIT 1`,
+            [actor.id],
+            (permissionErr, access) => {
+              if (permissionErr) return res.status(500).json({ error: 'Unable to verify staff permissions' });
+              if (!access) return res.status(403).json({ error: 'Your account has not been granted this module permission. Contact your Admin.' });
+              next();
+            }
+          );
+          return;
+        }
+      }
+
       next();
     });
   });
