@@ -313,22 +313,28 @@ app.get('/api/installments/overdue', authenticate, (req, res) => {
 });
 
 app.get('/api/reports/trends', authenticate, (req, res) => {
-    // Generate simple aggregation for weekly/monthly
+    // Weekly/monthly trends are restricted to the tenant's enabled finance products.
+    let productFilter = '';
+    const params = [req.user.tenant_id];
+    if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+      const allowed = req.user.allowed_features.split(',').filter(Boolean);
+      if (allowed.length) { productFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
+    }
     const query = `
-        SELECT 
-            strftime('%Y-%m', paid_date) as month,
-            strftime('%Y-%W', paid_date) as week,
-            SUM(amount + late_fee + other_charges) as total_collection,
-            SUM(CASE WHEN UPPER(payment_method) = 'CASH' OR payment_method IS NULL THEN (amount + late_fee + other_charges) ELSE 0 END) as cash_collection,
-            SUM(CASE WHEN UPPER(payment_method) = 'ONLINE' THEN (amount + late_fee + other_charges) ELSE 0 END) as online_collection
-        FROM installments 
-        WHERE tenant_id = ? AND status = 'PAID' AND paid_date IS NOT NULL
+        SELECT
+            strftime('%Y-%m', i.paid_date) as month,
+            strftime('%Y-%W', i.paid_date) as week,
+            SUM(i.amount + i.late_fee + i.other_charges) as total_collection,
+            SUM(CASE WHEN UPPER(i.payment_method) = 'CASH' OR i.payment_method IS NULL THEN (i.amount + i.late_fee + i.other_charges) ELSE 0 END) as cash_collection,
+            SUM(CASE WHEN UPPER(i.payment_method) = 'ONLINE' THEN (i.amount + i.late_fee + i.other_charges) ELSE 0 END) as online_collection
+        FROM installments i JOIN loans l ON i.loan_id=l.id
+        WHERE i.tenant_id = ? AND i.status = 'PAID' AND i.paid_date IS NOT NULL ${productFilter}
         GROUP BY month, week
         ORDER BY month ASC, week ASC
         LIMIT 50
     `;
 
-    db.all(query, [req.user.tenant_id], (err, rows) => {
+    db.all(query, params, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows);
     });
