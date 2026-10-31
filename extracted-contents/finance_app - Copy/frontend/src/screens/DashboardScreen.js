@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, FlatList, TouchableOpacity, TextInput, Linking, Modal, Platform } from 'react-native';
-import { getDashboardStats, getOverdueInstallments, getTodayInstallments, getUpcomingInstallments, updateInstallmentStatus, getSettings, getExportCustomers, getExportUpcoming } from '../api';
+import { api, getDashboardStats, getOverdueInstallments, getTodayInstallments, getUpcomingInstallments, updateInstallmentStatus, getSettings, getExportCustomers, getExportUpcoming } from '../api';
 import { useNavigation } from '@react-navigation/native';
 import { documentDirectory, writeAsStringAsync } from 'expo-file-system';
 import { isAvailableAsync, shareAsync } from 'expo-sharing';
@@ -39,6 +39,7 @@ export default function DashboardScreen() {
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
   const [financeType, setFinanceType] = useState('ALL');
+  const [availableFinanceTypes, setAvailableFinanceTypes] = useState(['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER']);
 
   // Search filter for Dashboard Lists
   const [searchQuery, setSearchQuery] = useState('');
@@ -101,6 +102,8 @@ export default function DashboardScreen() {
     setRefreshing(true);
     fetchStats().then(() => setRefreshing(false));
   }, [startDate, endDate, financeType]);
+
+  useEffect(() => { api.get('/manage/features').then(r => { const list=r.data?.allowed_features || []; if(list.length) setAvailableFinanceTypes(list); }).catch(() => {}); }, []);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
@@ -233,7 +236,7 @@ export default function DashboardScreen() {
           <Text style={{fontWeight: 'bold', marginBottom: 5}}>Global Filter</Text>
           
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{flexDirection: 'row', marginBottom: 10}}>
-              {['ALL', 'TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'INSURANCE', 'PERSONAL'].map(type => (
+              {['ALL', ...availableFinanceTypes].map(type => (
                   <TouchableOpacity key={type} style={[styles.typeBtn, financeType === type && styles.typeBtnActive]} onPress={() => setFinanceType(type)}>
                       <Text style={[styles.typeBtnText, financeType === type && {color: '#fff'}]}>{type.replace('_', ' ')}</Text>
                   </TouchableOpacity>
