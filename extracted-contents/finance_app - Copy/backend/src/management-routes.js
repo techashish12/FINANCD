@@ -72,6 +72,34 @@ function registerManagementRoutes(app, db) {
       setting_value TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+    // Assignable branch links for existing customer/loan/collection records.
+    const addColumnIfMissing = (table, column, definition) => {
+      db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
+        if (err) return console.error('Schema check failed:', err.message);
+        if (!columns.some(col => col.name === column)) {
+          db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, alterErr => {
+            if (alterErr) console.error('Schema update failed:', alterErr.message);
+          });
+        }
+      });
+    };
+    addColumnIfMissing('customers', 'branch_id', 'INTEGER');
+    addColumnIfMissing('loans', 'branch_id', 'INTEGER');
+    addColumnIfMissing('installments', 'branch_id', 'INTEGER');
+    // Automatically issue one immutable receipt whenever a payment first becomes PAID.
+    db.run(`CREATE TRIGGER IF NOT EXISTS trg_financd_auto_receipt
+      AFTER UPDATE OF status ON installments
+      WHEN NEW.status='PAID' AND OLD.status<>'PAID'
+      BEGIN
+        INSERT OR IGNORE INTO payment_receipts
+          (tenant_id,installment_id,receipt_number,amount,payment_method,paid_date)
+        VALUES
+          (NEW.tenant_id,NEW.id,
+           'RCPT-' || strftime('%Y%m%d','now') || '-' || printf('%06d',NEW.id),
+           COALESCE(NEW.amount,0)+COALESCE(NEW.late_fee,0)+COALESCE(NEW.other_charges,0),
+           COALESCE(NEW.payment_method,'CASH'),
+           COALESCE(NEW.paid_date,date('now')));
+      END`);
   });
 
   function authenticate(req, res, next) {
