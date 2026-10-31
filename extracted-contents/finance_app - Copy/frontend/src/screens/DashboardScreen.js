@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, FlatList, TouchableOpacity, TextInput, Linking, Modal, Platform } from 'react-native';
-import { getDashboardStats, getOverdueInstallments, getTodayInstallments, getUpcomingInstallments, updateInstallmentStatus, getSettings, getExportCustomers, getExportUpcoming } from '../api';
+import { api, getDashboardStats, getOverdueInstallments, getTodayInstallments, getUpcomingInstallments, updateInstallmentStatus, getSettings, getExportCustomers, getExportUpcoming } from '../api';
 import { useNavigation } from '@react-navigation/native';
 import { documentDirectory, writeAsStringAsync } from 'expo-file-system';
 import { isAvailableAsync, shareAsync } from 'expo-sharing';
@@ -39,6 +39,7 @@ export default function DashboardScreen() {
   const [startDate, setStartDate] = useState(null);
   const [endDate, setEndDate] = useState(null);
   const [financeType, setFinanceType] = useState('ALL');
+  const [availableFinanceTypes, setAvailableFinanceTypes] = useState(['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER']);
 
   // Search filter for Dashboard Lists
   const [searchQuery, setSearchQuery] = useState('');
@@ -55,6 +56,7 @@ export default function DashboardScreen() {
   const [selectedInst, setSelectedInst] = useState(null);
   const [modalAmount, setModalAmount] = useState('');
   const [modalLateFee, setModalLateFee] = useState('');
+  const [autoLateFee, setAutoLateFee] = useState(true);
   const [modalOtherCharges, setModalOtherCharges] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('CASH');
   const [paidDateObj, setPaidDateObj] = useState(new Date());
@@ -102,6 +104,8 @@ export default function DashboardScreen() {
     fetchStats().then(() => setRefreshing(false));
   }, [startDate, endDate, financeType]);
 
+  useEffect(() => { api.get('/manage/features').then(r => { const list=r.data?.allowed_features || []; if(list.length) setAvailableFinanceTypes(list); }).catch(() => {}); }, []);
+
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
         fetchStats();
@@ -113,6 +117,7 @@ export default function DashboardScreen() {
       setSelectedInst(inst);
       setModalAmount(inst.amount.toString());
       setModalLateFee('0');
+      setAutoLateFee(true);
       setModalOtherCharges('0');
       setPaymentMethod('CASH');
       setPaidDateObj(new Date());
@@ -126,7 +131,7 @@ export default function DashboardScreen() {
               selectedInst.id, 
               'PAID', 
               parseFloat(modalAmount) || selectedInst.amount, 
-              parseFloat(modalLateFee) || 0, 
+              autoLateFee ? undefined : (parseFloat(modalLateFee) || 0), 
               parseFloat(modalOtherCharges) || 0,
               paymentMethod,
               pdStr
@@ -198,14 +203,20 @@ export default function DashboardScreen() {
               )}
 
               <View style={{flexDirection: 'row', gap: 10, marginTop: 8}}>
-                  <TouchableOpacity onPress={() => Linking.openURL(`tel:+91${item.customer_phone}`)}>
+                  <TouchableOpacity onPress={() => {
+                      const phone = String(item.customer_phone || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+                      if(phone.length < 10) return universalAlert('Missing phone','Customer phone number is invalid.',[]);
+                      Linking.openURL(`tel:+91${phone}`);
+                  }}>
                       <Text style={{color: '#3498db', fontWeight: 'bold'}}>📞 Call</Text>
                   </TouchableOpacity>
                   <TouchableOpacity onPress={() => {
+                      const phone = String(item.customer_phone || '').replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+                      if(phone.length < 10) return universalAlert('Missing phone','Customer phone number is invalid.',[]);
                       const msg = `Hello ${item.customer_name}, your ${item.finance_type} installment of ₹${item.amount} is due on ${item.due_date}. Regards, ${companyName}`;
-                      const url = Platform.OS === 'web' 
-                          ? `https://wa.me/91${item.customer_phone}?text=${encodeURIComponent(msg)}`
-                          : `whatsapp://send?phone=+91${item.customer_phone}&text=${encodeURIComponent(msg)}`;
+                      const url = Platform.OS === 'web'
+                          ? `https://wa.me/91${phone}?text=${encodeURIComponent(msg)}`
+                          : `whatsapp://send?phone=91${phone}&text=${encodeURIComponent(msg)}`;
                       Linking.openURL(url);
                   }}>
                       <Text style={{color: '#25D366', fontWeight: 'bold'}}>💬 WhatsApp</Text>
@@ -233,7 +244,7 @@ export default function DashboardScreen() {
           <Text style={{fontWeight: 'bold', marginBottom: 5}}>Global Filter</Text>
           
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{flexDirection: 'row', marginBottom: 10}}>
-              {['ALL', 'TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'INSURANCE', 'PERSONAL'].map(type => (
+              {['ALL', ...availableFinanceTypes].map(type => (
                   <TouchableOpacity key={type} style={[styles.typeBtn, financeType === type && styles.typeBtnActive]} onPress={() => setFinanceType(type)}>
                       <Text style={[styles.typeBtnText, financeType === type && {color: '#fff'}]}>{type.replace('_', ' ')}</Text>
                   </TouchableOpacity>
@@ -441,7 +452,17 @@ export default function DashboardScreen() {
                   <TextInput style={styles.modalInput} value={modalAmount} onChangeText={setModalAmount} keyboardType="numeric" />
                   
                   <Text style={styles.modalLabel}>Late Fees</Text>
-                  <TextInput style={styles.modalInput} value={modalLateFee} onChangeText={setModalLateFee} keyboardType="numeric" />
+                  <View style={{flexDirection:'row',gap:8,marginBottom:8}}>
+                    <TouchableOpacity style={[styles.typeBtn,autoLateFee&&styles.typeBtnActive]} onPress={()=>setAutoLateFee(true)}>
+                      <Text style={[styles.typeBtnText,autoLateFee&&{color:'#fff'}]}>Auto calculate</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.typeBtn,!autoLateFee&&styles.typeBtnActive]} onPress={()=>setAutoLateFee(false)}>
+                      <Text style={[styles.typeBtnText,!autoLateFee&&{color:'#fff'}]}>Manual amount</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {autoLateFee ? <Text style={{fontSize:12,color:'#667085',marginBottom:10}}>Calculated from days overdue and the finance account's late-fee rule. You can switch to manual entry.</Text> : (
+                    <TextInput style={styles.modalInput} value={modalLateFee} onChangeText={setModalLateFee} keyboardType="numeric" />
+                  )}
 
                   <Text style={styles.modalLabel}>Other Charges</Text>
                   <TextInput style={styles.modalInput} value={modalOtherCharges} onChangeText={setModalOtherCharges} keyboardType="numeric" />

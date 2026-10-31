@@ -10,17 +10,37 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 3000;
 // We securely pull the secret from the .env file instead of hardcoding it.
-const JWT_SECRET = process.env.JWT_SECRET || 'fintrack_super_secret_key_123'; 
+const JWT_SECRET = process.env.JWT_SECRET; 
 
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-
-// Verbose Logging Middleware
-app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
-        console.log('Body:', req.body);
+const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean);
+app.use(cors({
+    origin(origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        if (process.env.NODE_ENV !== 'production' && allowedOrigins.length === 0) return callback(null, true);
+        return callback(new Error('Origin is not allowed by CORS'));
     }
+}));
+app.use(express.json({ limit: '5mb' }));
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+});
+
+// Enforce a verified current database identity for every API route (except login).
+const { installSecurityGuards } = require('./security-guards');
+installSecurityGuards(app, { db, bcrypt, jwt });
+
+// Additive branch, staff, finance, audit and receipt APIs.
+const { registerManagementRoutes } = require('./management-routes');
+registerManagementRoutes(app, db);
+
+// Request logging deliberately excludes request bodies, credentials and personal data.
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
     next();
 });
 
@@ -31,19 +51,23 @@ app.get('/', (req, res) => {
 
 // JWT Middleware - Now enforces Tenant checks
 const authenticate = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.status(401).json({ error: 'No token provided' });
-    
-    jwt.verify(token, JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ error: 'Invalid token' });
-        req.user = user;
-        next();
-    });
+    // The global security guard already verified the token and reloaded the current DB role/tenant.
+    // Do not overwrite that fresh identity with stale JWT claims.
+    if (req.user && req.user.id) return next();
+    return res.status(401).json({ error: 'Authentication required' });
 };
 
 // --- AUTHENTICATION ---
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+
 app.post('/api/login', (req, res) => {
+    const loginKey = String(req.ip || req.socket.remoteAddress || 'unknown') + ':' + String(req.body?.username || '').toLowerCase();
+    const now = Date.now();
+    const recent = (loginAttempts.get(loginKey) || []).filter(time => now - time < LOGIN_WINDOW_MS);
+    if (recent.length >= LOGIN_MAX_ATTEMPTS) return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+    loginAttempts.set(loginKey, recent);
     const { username, password } = req.body;
     
     if (!username || !password) {
@@ -52,23 +76,24 @@ app.post('/api/login', (req, res) => {
     }
 
     // Get the user and their specific tenant's feature flags
-    db.get(`SELECT u.*, t.allowed_features FROM users u LEFT JOIN tenants t ON u.tenant_id = t.id WHERE u.username = ?`, [username], (err, user) => {
+    db.get(`SELECT u.*, t.allowed_features, COALESCE(t.is_active,1) tenant_active FROM users u LEFT JOIN tenants t ON u.tenant_id = t.id WHERE u.username = ?`, [username], (err, user) => {
         if (err) {
             console.error("DB Error on Login:", err.message);
             return res.status(500).json({ error: err.message });
         }
         if (!user) {
-            console.error(`Login failed: Username '${username}' not found in DB`);
+            recent.push(now); loginAttempts.set(loginKey, recent);
             return res.status(401).json({ error: `Username '${username}' not found.` });
         }
 
+        if (user.tenant_id != null && Number(user.tenant_active) !== 1) return res.status(403).json({ error: 'This finance company account is disabled' });
         const isMatch = bcrypt.compareSync(password, user.password);
         if (!isMatch) {
-            console.error(`Login failed: Incorrect password for user '${username}'`);
+            recent.push(now); loginAttempts.set(loginKey, recent);
             return res.status(401).json({ error: 'Incorrect password.' });
         }
 
-        console.log(`User '${username}' successfully logged in.`);
+        loginAttempts.delete(loginKey);
         
         // Embed the tenant ID in the token, unless it's the super admin
         const payload = { 
@@ -79,7 +104,7 @@ app.post('/api/login', (req, res) => {
             features: user.allowed_features || 'ALL'
         };
 
-        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
         res.json({ token, user: payload });
     });
 });
@@ -95,27 +120,32 @@ app.get('/api/super/tenants', authenticate, (req, res) => {
 
 app.post('/api/super/tenants', authenticate, (req, res) => {
     if (req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Unauthorized' });
-    const { company_name, allowed_features, admin_username, admin_password } = req.body;
-    
-    if (!company_name || !admin_username || !admin_password) return res.status(400).json({ error: 'Missing required fields' });
-
+    const { company_name, email, phone, contact_person, address, plan_name, allowed_features, admin_username, admin_email, admin_password } = req.body || {};
+    const supported = ['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'];
+    const selected = Array.isArray(allowed_features) ? allowed_features : String(allowed_features || '').split(',');
+    const features = [...new Set(selected.map(x=>String(x).trim()).filter(x=>supported.includes(x)))];
+    if (!company_name || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !admin_username || !admin_password || admin_password.length < 12 || !features.length) {
+      return res.status(400).json({ error: 'Company, valid email, admin username, 12+ character password and at least one finance type are required' });
+    }
+    const hash = bcrypt.hashSync(admin_password, 12);
     db.serialize(() => {
-        db.run('BEGIN TRANSACTION');
-        
-        db.run(`INSERT INTO tenants (company_name, allowed_features) VALUES (?, ?)`, [company_name, allowed_features || 'ALL'], function(err) {
-            if (err) { db.run('ROLLBACK'); return res.status(500).json({ error: err.message }); }
-            
-            const tenantId = this.lastID;
-            const hash = bcrypt.hashSync(admin_password, 10);
-            
-            db.run(`INSERT INTO users (tenant_id, username, password, role) VALUES (?, ?, ?, 'ADMIN')`, [tenantId, admin_username, hash], function(err2) {
-                if (err2) { db.run('ROLLBACK'); return res.status(500).json({ error: err2.message }); }
-                
-                db.run(`INSERT INTO settings (tenant_id, company_name) VALUES (?, ?)`, [tenantId, company_name], function(err3) {
-                    if (err3) { db.run('ROLLBACK'); return res.status(500).json({ error: err3.message }); }
-                    
-                    db.run('COMMIT');
-                    res.json({ message: 'Tenant provisioned successfully', tenant_id: tenantId });
+      db.run('BEGIN IMMEDIATE');
+      db.run(`INSERT INTO tenants (company_name,allowed_features,email,phone,contact_person,address,plan_name,created_by)
+        VALUES (?,?,?,?,?,?,?,?)`,
+        [company_name.trim(),features.join(','),email.trim().toLowerCase(),phone || '',contact_person || '',address || '',plan_name || 'STANDARD',req.user.id],
+        function(err) {
+          if(err){db.run('ROLLBACK');return res.status(400).json({error:err.message});}
+          const tenantId=this.lastID;
+          db.run(`INSERT INTO users (tenant_id,username,email,password,role) VALUES (?,?,?,?,'ADMIN')`,
+            [tenantId,admin_username.trim(),admin_email || email.trim().toLowerCase(),hash],function(userErr){
+              if(userErr){db.run('ROLLBACK');return res.status(400).json({error:userErr.message});}
+              db.run('INSERT INTO settings (tenant_id,company_name,company_phone) VALUES (?,?,?)',
+                [tenantId,company_name.trim(),phone || ''],function(settingsErr){
+                  if(settingsErr){db.run('ROLLBACK');return res.status(500).json({error:settingsErr.message});}
+                  db.run('COMMIT',commitErr=>{
+                    if(commitErr)return res.status(500).json({error:commitErr.message});
+                    res.status(201).json({message:'Finance company account created',tenant_id:tenantId,admin_username,features});
+                  });
                 });
             });
         });
@@ -124,12 +154,24 @@ app.post('/api/super/tenants', authenticate, (req, res) => {
 
 app.put('/api/super/tenants/:id', authenticate, (req, res) => {
     if (req.user.role !== 'SUPER_ADMIN') return res.status(403).json({ error: 'Unauthorized' });
-    const { allowed_features, is_active } = req.body;
-    
-    db.run(`UPDATE tenants SET allowed_features = ?, is_active = ? WHERE id = ?`, [allowed_features, is_active, req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Tenant updated successfully' });
-    });
+    const { allowed_features, is_active, email, phone, contact_person, address, plan_name } = req.body || {};
+    const supported = ['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'];
+    const selected = Array.isArray(allowed_features) ? allowed_features : String(allowed_features || '').split(',');
+    const features = [...new Set(selected.map(x=>String(x).trim()).filter(x=>supported.includes(x)))];
+    if (allowed_features !== undefined && !features.length) return res.status(400).json({error:'Select at least one supported finance product'});
+    db.run(`UPDATE tenants SET
+      allowed_features=COALESCE(?,allowed_features),is_active=COALESCE(?,is_active),
+      email=COALESCE(?,email),phone=COALESCE(?,phone),contact_person=COALESCE(?,contact_person),
+      address=COALESCE(?,address),plan_name=COALESCE(?,plan_name)
+      WHERE id=?`,
+      [allowed_features===undefined?null:features.join(','),is_active===undefined?null:is_active,
+       email===undefined?null:email,phone===undefined?null:phone,contact_person===undefined?null:contact_person,
+       address===undefined?null:address,plan_name===undefined?null:plan_name,req.params.id],
+      function(err) {
+        if(err) return res.status(500).json({error:err.message});
+        if(!this.changes) return res.status(404).json({error:'Finance company not found'});
+        res.json({message:'Finance company updated',allowed_features:allowed_features===undefined?undefined:features});
+      });
 });
 
 app.get('/api/users', authenticate, (req, res) => {
@@ -211,6 +253,9 @@ app.get('/api/installments/today', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         typeFilter = ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
 
     const query = `
@@ -246,10 +291,12 @@ app.get('/api/installments/overdue', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         typeFilter = ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
 
     const query = `
-        SELECT i.*, c.name as customer_name, c.phone as customer_phone, l.loan_code, l.finance_type, l.vehicle_name, l.vehicle_reg_number, l.vendor_name, l.collateral_name, l.collateral_weight 
         SELECT i.*, c.name as customer_name, c.phone as customer_phone, l.loan_code, l.finance_type, l.vehicle_name, l.vehicle_reg_number, l.vendor_name, l.collateral_name, l.collateral_weight 
         FROM installments i 
         JOIN loans l ON i.loan_id = l.id 
@@ -266,22 +313,28 @@ app.get('/api/installments/overdue', authenticate, (req, res) => {
 });
 
 app.get('/api/reports/trends', authenticate, (req, res) => {
-    // Generate simple aggregation for weekly/monthly
+    // Weekly/monthly trends are restricted to the tenant's enabled finance products.
+    let productFilter = '';
+    const params = [req.user.tenant_id];
+    if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+      const allowed = req.user.allowed_features.split(',').filter(Boolean);
+      if (allowed.length) { productFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
+    }
     const query = `
-        SELECT 
-            strftime('%Y-%m', paid_date) as month,
-            strftime('%Y-%W', paid_date) as week,
-            SUM(amount + late_fee + other_charges) as total_collection,
-            SUM(CASE WHEN UPPER(payment_method) = 'CASH' OR payment_method IS NULL THEN (amount + late_fee + other_charges) ELSE 0 END) as cash_collection,
-            SUM(CASE WHEN UPPER(payment_method) = 'ONLINE' THEN (amount + late_fee + other_charges) ELSE 0 END) as online_collection
-        FROM installments 
-        WHERE tenant_id = ? AND status = 'PAID' AND paid_date IS NOT NULL
+        SELECT
+            strftime('%Y-%m', i.paid_date) as month,
+            strftime('%Y-%W', i.paid_date) as week,
+            SUM(i.amount + i.late_fee + i.other_charges) as total_collection,
+            SUM(CASE WHEN UPPER(i.payment_method) = 'CASH' OR i.payment_method IS NULL THEN (i.amount + i.late_fee + i.other_charges) ELSE 0 END) as cash_collection,
+            SUM(CASE WHEN UPPER(i.payment_method) = 'ONLINE' THEN (i.amount + i.late_fee + i.other_charges) ELSE 0 END) as online_collection
+        FROM installments i JOIN loans l ON i.loan_id=l.id
+        WHERE i.tenant_id = ? AND i.status = 'PAID' AND i.paid_date IS NOT NULL ${productFilter}
         GROUP BY month, week
         ORDER BY month ASC, week ASC
         LIMIT 50
     `;
 
-    db.all(query, [req.user.tenant_id], (err, rows) => {
+    db.all(query, params, (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows);
     });
@@ -398,7 +451,11 @@ app.post('/api/loans', authenticate, (req, res) => {
   
   const loanCode = `LOAN-${Math.floor(Date.now() / 1000)}`;
 
-  db.serialize(() => {
+  // Never allow a tenant to attach another finance company's customer to its loan.
+  db.get('SELECT id FROM customers WHERE id=? AND tenant_id=?',[customer_id,req.user.tenant_id],(customerErr,customer)=>{
+    if(customerErr) return res.status(500).json({error:customerErr.message});
+    if(!customer) return res.status(404).json({error:'Customer not found in this finance company'});
+    db.serialize(() => {
     db.run('BEGIN TRANSACTION');
 
     db.run(
@@ -427,6 +484,7 @@ app.post('/api/loans', authenticate, (req, res) => {
         });
       }
     );
+    });
   });
 });
 
@@ -549,11 +607,11 @@ app.post('/api/loans/:id/mark-all-paid', authenticate, (req, res) => {
 });
 
 // Edit a specific installment (unpaid) directly (amount or due_date)
-app.put('/api/installments/:id', (req, res) => {
+app.put('/api/installments/:id', authenticate, (req, res) => {
     const { amount, due_date } = req.body;
     db.run(
-        `UPDATE installments SET amount = ?, due_date = ? WHERE id = ?`,
-        [amount, due_date, req.params.id],
+        `UPDATE installments SET amount = ?, due_date = ? WHERE id = ? AND tenant_id = ?`,
+        [amount, due_date, req.params.id, req.user.tenant_id],
         function(err) {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ message: 'Installment modified' });
@@ -643,14 +701,16 @@ app.get('/api/dashboard', authenticate, (req, res) => {
             paramsDue.push(startDate, endDate);
         }
         
-        let typeParamPaid = [...paramsPaid];
-        let typeParamDue = [...paramsDue];
-
+        const typeParams = [];
         if (financeType && financeType !== 'ALL') {
             typeFilter = ` AND l.finance_type = ?`;
-            typeParamPaid.push(financeType);
-            typeParamDue.push(financeType);
+            typeParams.push(financeType);
+        } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+            const allowed = req.user.allowed_features.split(',').filter(Boolean);
+            if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; typeParams.push(...allowed); }
         }
+        const typeParamPaid = [...paramsPaid, ...typeParams];
+        const typeParamDue = [...paramsDue, ...typeParams];
 
         const currentMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
         
@@ -660,8 +720,8 @@ app.get('/api/dashboard', authenticate, (req, res) => {
             totalDelayed: { q: `SELECT SUM(i.amount) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'DELAYED' ${dateFilterDue} ${typeFilter}`, p: typeParamDue },
             totalLateFees: { q: `SELECT SUM(i.late_fee) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' ${dateFilterPaid} ${typeFilter}`, p: typeParamPaid },
             delayedInstallmentsCount: { q: `SELECT COUNT(*) as count FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'DELAYED' ${dateFilterDue} ${typeFilter}`, p: typeParamDue },
-            thisMonthCollection: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND i.paid_date >= ? ${typeFilter}`, p: typeFilter ? [tenantId, currentMonthStart, financeType] : [tenantId, currentMonthStart] },
-            totalCustomersCount: { q: `SELECT COUNT(DISTINCT c.id) as count FROM customers c LEFT JOIN loans l ON c.id = l.customer_id WHERE c.tenant_id = ? ${typeFilter ? 'AND l.finance_type = ?' : ''}`, p: typeFilter ? [tenantId, financeType] : [tenantId] },
+            thisMonthCollection: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND i.paid_date >= ? ${typeFilter}`, p: [tenantId, currentMonthStart, ...typeParams] },
+            totalCustomersCount: { q: `SELECT COUNT(DISTINCT c.id) as count FROM customers c LEFT JOIN loans l ON c.id = l.customer_id WHERE c.tenant_id = ? ${typeFilter}`, p: [tenantId, ...typeParams] },
             totalCash: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND (UPPER(i.payment_method) = 'CASH' OR i.payment_method IS NULL OR i.payment_method = '') ${dateFilterPaid} ${typeFilter}`, p: typeParamPaid },
             totalOnline: { q: `SELECT SUM(i.amount + i.late_fee + i.other_charges) as total FROM installments i JOIN loans l ON i.loan_id = l.id WHERE i.tenant_id = ? AND i.status = 'PAID' AND UPPER(i.payment_method) = 'ONLINE' ${dateFilterPaid} ${typeFilter}`, p: typeParamPaid }
         };
@@ -684,14 +744,14 @@ app.get('/api/dashboard', authenticate, (req, res) => {
 });
 
 // Get Action Needed Installments (Today & Delayed) with optional date & type filtering
-app.get('/api/installments/action-needed', (req, res) => {
+app.get('/api/installments/action-needed', authenticate, (req, res) => {
     const { startDate, endDate, financeType } = req.query;
     const today = new Date().toISOString().split('T')[0];
     
-    db.run(`UPDATE installments SET status = 'DELAYED' WHERE status = 'UNPAID' AND due_date < ?`, [today], (err) => {
+    db.run(`UPDATE installments SET status = 'DELAYED' WHERE status = 'UNPAID' AND due_date < ? AND tenant_id = ?`, [today, req.user.tenant_id], (err) => {
         let dateFilter = "";
         let typeFilter = "";
-        let params = [today];
+        let params = [req.user.tenant_id, today];
 
         if (startDate && endDate) {
             dateFilter = ` AND i.due_date BETWEEN ? AND ?`;
@@ -701,6 +761,9 @@ app.get('/api/installments/action-needed', (req, res) => {
         if (financeType && financeType !== 'ALL') {
             typeFilter = ` AND l.finance_type = ?`;
             params.push(financeType);
+        } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+            const allowed = req.user.allowed_features.split(',').filter(Boolean);
+            if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
         }
 
         const query = `
@@ -708,7 +771,7 @@ app.get('/api/installments/action-needed', (req, res) => {
             FROM installments i
             JOIN loans l ON i.loan_id = l.id
             JOIN customers c ON l.customer_id = c.id
-            WHERE l.status != 'DEFAULTER' AND (i.status = 'DELAYED' OR (i.status = 'UNPAID' AND i.due_date = ?)) ${dateFilter} ${typeFilter}
+            WHERE i.tenant_id = ? AND l.status != 'DEFAULTER' AND (i.status = 'DELAYED' OR (i.status = 'UNPAID' AND i.due_date = ?)) ${dateFilter} ${typeFilter}
             ORDER BY i.due_date ASC
         `;
         db.all(query, params, (err, rows) => {
@@ -742,6 +805,9 @@ app.get('/api/installments/upcoming', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         typeFilter = ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { typeFilter = ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
 
     const query = `
@@ -749,7 +815,7 @@ app.get('/api/installments/upcoming', authenticate, (req, res) => {
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id
-        WHERE l.status != 'DEFAULTER' AND i.status = 'UNPAID' AND i.due_date > ? AND i.due_date <= ? ${typeFilter}
+        WHERE i.tenant_id = ? AND l.status != 'DEFAULTER' AND i.status = 'UNPAID' AND i.due_date > ? AND i.due_date <= ? ${typeFilter}
         ORDER BY i.due_date ASC
     `;
     db.all(query, params, (err, rows) => {
@@ -759,15 +825,18 @@ app.get('/api/installments/upcoming', authenticate, (req, res) => {
 });
 
 // Export: All Customers (JSON format for mobile frontend to convert to CSV)
-app.get('/api/export/customers', (req, res) => {
+app.get('/api/export/customers', authenticate, (req, res) => {
     const { financeType } = req.query;
     let query = `SELECT c.book_number, c.name, c.phone, c.address, l.finance_type, l.total_finance_amount, l.status as loan_status 
-            FROM customers c LEFT JOIN loans l ON c.id = l.customer_id`;
-    let params = [];
+            FROM customers c LEFT JOIN loans l ON c.id = l.customer_id AND l.tenant_id = c.tenant_id WHERE c.tenant_id = ?`;
+    let params = [req.user.tenant_id];
     
     if (financeType && financeType !== 'ALL') {
-        query += ` WHERE l.finance_type = ?`;
+        query += ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { query += ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
             
     db.all(query, params, (err, rows) => {
@@ -798,6 +867,9 @@ app.get('/api/installments/collections', authenticate, (req, res) => {
     if (financeType && financeType !== 'ALL') {
         query += ` AND l.finance_type = ?`;
         params.push(financeType);
+    } else if (req.user.role !== 'SUPER_ADMIN' && req.user.allowed_features && req.user.allowed_features !== 'ALL') {
+        const allowed = req.user.allowed_features.split(',').filter(Boolean);
+        if (allowed.length) { query += ` AND l.finance_type IN (${allowed.map(()=>'?').join(',')})`; params.push(...allowed); }
     }
     
     if (paymentMethod && paymentMethod !== 'ALL') {
@@ -814,22 +886,22 @@ app.get('/api/installments/collections', authenticate, (req, res) => {
 });
 
 // Export: Specific Customer History (JSON)
-app.get('/api/export/customer/:id', (req, res) => {
+app.get('/api/export/customer/:id', authenticate, (req, res) => {
     const query = `
         SELECT i.due_date as Due_Date, i.amount as Base_Amount, i.late_fee as Late_Fees, i.other_charges as Other_Charges, i.status as Status, i.payment_method as Method, i.paid_date as Paid_Date
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
-        WHERE l.customer_id = ?
+        WHERE l.customer_id = ? AND l.tenant_id = ?
         ORDER BY i.due_date ASC
     `;
-    db.all(query, [req.params.id], (err, rows) => {
+    db.all(query, [req.params.id, req.user.tenant_id], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(rows);
     });
 });
 
 // Export: Upcoming Installments (JSON format for mobile frontend to convert to CSV)
-app.get('/api/export/upcoming', (req, res) => {
+app.get('/api/export/upcoming', authenticate, (req, res) => {
     const { startDate, endDate, financeType } = req.query;
     const today = new Date().toISOString().split('T')[0];
     
@@ -838,9 +910,9 @@ app.get('/api/export/upcoming', (req, res) => {
         FROM installments i
         JOIN loans l ON i.loan_id = l.id
         JOIN customers c ON l.customer_id = c.id
-        WHERE i.status != 'PAID' AND i.due_date >= ?
+        WHERE i.tenant_id = ? AND i.status != 'PAID' AND i.due_date >= ?
     `;
-    let params = [today];
+    let params = [req.user.tenant_id, today];
     
     if (startDate && endDate) {
         query += ` AND i.due_date BETWEEN ? AND ?`;
@@ -860,8 +932,33 @@ app.get('/api/export/upcoming', (req, res) => {
     });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server is running on port ${PORT}`);
+// Complete additive schema migrations before accepting traffic.
+function ensureColumn(table, column, definition) {
+  return new Promise((resolve, reject) => {
+    db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
+      if (err) return reject(err);
+      if (columns.some(item => item.name === column)) return resolve();
+      db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`, alterErr => alterErr ? reject(alterErr) : resolve());
+    });
+  });
+}
+
+Promise.all([
+  ensureColumn('tenants','email','TEXT'),
+  ensureColumn('tenants','phone','TEXT'),
+  ensureColumn('tenants','contact_person','TEXT'),
+  ensureColumn('tenants','address','TEXT'),
+  ensureColumn('tenants','plan_name',"TEXT DEFAULT 'STANDARD'"),
+  ensureColumn('tenants','created_by','INTEGER'),
+  ensureColumn('users','email','TEXT'),
+  ensureColumn('customers','branch_id','INTEGER'),
+  ensureColumn('loans','branch_id','INTEGER'),
+  ensureColumn('installments','branch_id','INTEGER')
+]).then(() => {
+  app.listen(PORT, '0.0.0.0', () => console.log(`Server is running on port ${PORT}`));
+}).catch(error => {
+  console.error('FINANCD database migration failed; server will not start:', error.message);
+  process.exitCode = 1;
 });
 
 // --- AI MOCK ENDPOINTS FOR DEMO PURPOSES ---

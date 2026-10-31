@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, StyleSheet, ScrollView, TouchableOpacity, Platform } from 'react-native';
-import { addCustomer, createLoan } from '../api';
+import { addCustomer, createLoan, api } from '../api';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { addDays, format } from 'date-fns';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -28,6 +28,8 @@ export default function AddFinanceScreen() {
 
   // Loan Data
   const [financeType, setFinanceType] = useState('TWO_WHEELER');
+  const [allowedFinanceTypes, setAllowedFinanceTypes] = useState(['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER']);
+  useEffect(() => { api.get('/manage/features').then(r => { const list=r.data?.allowed_features || []; if(list.length){setAllowedFinanceTypes(list);setFinanceType(current=>list.includes(current)?current:list[0]);} }).catch(() => {}); }, []);
   const [vehicleName, setVehicleName] = useState('');
   const [vehicleRegNumber, setVehicleRegNumber] = useState('');
   const [vehiclePhotoUrl, setVehiclePhotoUrl] = useState('');
@@ -106,21 +108,28 @@ export default function AddFinanceScreen() {
         return universalAlert('Error', 'Provide Installment Amount or Number of Installments', []);
     }
 
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(instAmt) || instAmt <= 0 || !Number.isInteger(totalInstCount) || totalInstCount < 1 || totalInstCount > 600) {
+      return universalAlert('Invalid Kist schedule', 'Enter a positive finance amount and a valid Kist amount or count (maximum 600 Kist).', []);
+    }
+    const finalInstallment = Number((total - instAmt * (totalInstCount - 1)).toFixed(2));
+    if (finalInstallment <= 0) {
+      return universalAlert('Kist total does not match', 'The Kist amount and count exceed the finance amount. Reduce the Kist amount or count.', []);
+    }
+
+    setInstallmentAmount(String(instAmt));
+    setTotalInstallments(String(totalInstCount));
     let generated = [];
     let currentDate = new Date(startDateObj);
     const valToAdd = parseInt(intervalValue, 10) || 1;
 
     for (let i = 0; i < totalInstCount; i++) {
-        const amountForThisInst = (i === totalInstCount - 1 && (total % instAmt !== 0)) 
-            ? (total % instAmt) 
-            : instAmt;
-
+        const amountForThisInst = i === totalInstCount - 1 ? finalInstallment : instAmt;
         generated.push({
             id: i.toString(),
             amount: amountForThisInst,
             due_date: format(currentDate, 'yyyy-MM-dd')
         });
-        
+
         // Intelligent date addition
         if (intervalType === 'Days') {
             currentDate = addDays(currentDate, valToAdd);
@@ -268,14 +277,14 @@ export default function AddFinanceScreen() {
           
           <Text style={styles.label}>Finance Type</Text>
           <View style={{flexDirection: 'row', gap: 5, marginBottom: 15, flexWrap: 'wrap'}}>
-              {['TWO_WHEELER', 'FOUR_WHEELER', 'UDHAR', 'GIRVI', 'HOME_LOAN', 'PERSONAL'].map(type => (
+              {allowedFinanceTypes.map(type => (
                   <TouchableOpacity key={type} style={[styles.typeBtn, financeType === type && styles.typeBtnActive]} onPress={() => setFinanceType(type)}>
                       <Text style={[styles.typeBtnText, financeType === type && {color: '#fff'}]}>{type.replace('_', ' ')}</Text>
                   </TouchableOpacity>
               ))}
           </View>
 
-          {(financeType === 'TWO_WHEELER' || financeType === 'FOUR_WHEELER') && (
+          {(['TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE'].includes(financeType)) && (
               <>
                   <Text style={styles.label}>Vehicle Details</Text>
                   <TextInput style={styles.input} placeholder="Vehicle Name" value={vehicleName} onChangeText={setVehicleName} />
@@ -291,7 +300,7 @@ export default function AddFinanceScreen() {
               </>
           )}
 
-          {financeType === 'GIRVI' && (
+          {(['GIRVI','GOLD_LOAN','SILVER_LOAN'].includes(financeType)) && (
               <>
                   <Text style={styles.label}>Girvi (Jewelry/Collateral) Details</Text>
                   <TextInput style={styles.input} placeholder="Item Name (e.g. Gold Chain, iPhone)" value={collateralName} onChangeText={setCollateralName} />
@@ -316,7 +325,7 @@ export default function AddFinanceScreen() {
               </>
           )}
 
-          {financeType === 'HOME_LOAN' && (
+          {(['HOME_LOAN','MORTGAGE','PROPERTY_LOAN'].includes(financeType)) && (
               <>
                   <Text style={styles.label}>Property Details</Text>
                   <TextInput style={styles.input} placeholder="Property Type & Name" value={collateralName} onChangeText={setCollateralName} />

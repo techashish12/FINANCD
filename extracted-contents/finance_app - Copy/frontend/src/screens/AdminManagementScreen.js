@@ -1,0 +1,283 @@
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { api } from '../api';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+
+const money = value => '₹' + Number(value || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const notify = (title, message) => Platform.OS === 'web' ? window.alert(title + '\n' + message) : Alert.alert(title, message);
+
+function Field({ value, onChangeText, placeholder, keyboardType }) {
+  return <TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} keyboardType={keyboardType || 'default'} style={styles.input} />;
+}
+function Action({ title, onPress, secondary }) {
+  return <TouchableOpacity onPress={onPress} style={[styles.button, secondary && styles.secondary]}><Text style={[styles.buttonText, secondary && styles.secondaryText]}>{title}</Text></TouchableOpacity>;
+}
+function Panel({ title, children }) {
+  return <View style={styles.panel}><Text style={styles.panelTitle}>{title}</Text>{children}</View>;
+}
+
+export default function AdminManagementScreen() {
+  const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = useState(null);
+  const [branches, setBranches] = useState([]);
+  const [audit, setAudit] = useState([]);
+  const [report, setReport] = useState(null);
+  const [reportStart, setReportStart] = useState('');
+  const [reportEnd, setReportEnd] = useState('');
+  const [reportType, setReportType] = useState('ALL');
+  const [reportGroup, setReportGroup] = useState('month');
+  const [reportCustomer, setReportCustomer] = useState('');
+  const [loanId, setLoanId] = useState('');
+  const [staff, setStaff] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [financial, setFinancial] = useState(null);
+  const [branchName, setBranchName] = useState('');
+  const [branchCode, setBranchCode] = useState('');
+  const [branchTenant, setBranchTenant] = useState('');
+  const [staffName, setStaffName] = useState('');
+  const [staffPassword, setStaffPassword] = useState('');
+  const [staffRole, setStaffRole] = useState('AGENT');
+  const [staffTenant, setStaffTenant] = useState('');
+  const [permissionStaff, setPermissionStaff] = useState('');
+  const [permissionBranch, setPermissionBranch] = useState('');
+  const [canCollect, setCanCollect] = useState(true);
+  const [canCustomers, setCanCustomers] = useState(false);
+  const [canReports, setCanReports] = useState(false);
+  const [expenseCategory, setExpenseCategory] = useState('');
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().slice(0,10));
+  const [expenseBranch, setExpenseBranch] = useState('');
+  const [receiptInstallment, setReceiptInstallment] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [o,b,s,e,f,a] = await Promise.all([
+        api.get('/manage/overview'), api.get('/manage/branches'),
+        api.get('/manage/staff'), api.get('/manage/expenses'),
+        api.get('/manage/reports/financial'), api.get('/manage/audit')
+      ]);
+      setOverview(o.data); setBranches(b.data); setStaff(s.data); setExpenses(e.data); setFinancial(f.data); setAudit(a.data);
+    } catch (error) {
+      notify('Management data unavailable', error.message || 'Please check your account permissions and backend connection.');
+    } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const loadReport = async () => {
+    try {
+      const params={group_by:reportGroup,finance_type:reportType};
+      if(reportStart) params.start_date=reportStart;
+      if(reportEnd) params.end_date=reportEnd;
+      if(reportCustomer.trim()) params.customer_id=reportCustomer.trim();
+      const response=await api.get('/manage/reports/detail',{params});
+      setReport(response.data);
+    } catch(e) { notify('Report unavailable',e.message); }
+  };
+
+  const updateLoanAccount = async (status,is_closed) => {
+    if(!loanId.trim() || !Number.isInteger(Number(loanId))) return notify('Loan ID required','Enter a valid loan ID.');
+    try {
+      await api.patch('/manage/loans/'+Number(loanId)+'/account',{status,is_closed});
+      notify('Account updated',status==='DEFAULTER'?'Loan marked as defaulter.':status==='COMPLETED'?'Loan marked completed.':'Loan account status changed.');
+      setLoanId('');
+    } catch(e) { notify('Could not update loan',e.message); }
+  };
+
+  const createBranch = async () => {
+    if (!branchName.trim()) return notify('Missing details','Enter a branch name.');
+    try {
+      await api.post('/manage/branches',{name:branchName.trim(),code:branchCode.trim(),tenant_id:branchTenant ? Number(branchTenant) : undefined});
+      setBranchName(''); setBranchCode(''); setBranchTenant(''); await load(); notify('Saved','Branch created.');
+    } catch(e) { notify('Could not create branch',e.message); }
+  };
+
+  const createStaff = async () => {
+    if (!staffName.trim() || staffPassword.length < 12) return notify('Check details','Enter a username and a password of at least 12 characters.');
+    try {
+      await api.post('/manage/staff',{username:staffName.trim(),password:staffPassword,role:staffRole,tenant_id:staffTenant ? Number(staffTenant) : undefined});
+      setStaffName(''); setStaffPassword(''); setStaffTenant(''); await load(); notify('Saved','Staff account created.');
+    } catch(e) { notify('Could not create staff',e.message); }
+  };
+
+  const savePermissions = async () => {
+    if(!permissionStaff.trim() || !permissionBranch.trim()) return notify('Missing details','Enter a staff ID and branch ID.');
+    try {
+      await api.put('/manage/staff/'+Number(permissionStaff)+'/permissions',{
+        branch_id:Number(permissionBranch),can_collect:canCollect,
+        can_manage_customers:canCustomers,can_view_reports:canReports
+      });
+      notify('Saved','Branch permissions updated.');
+    } catch(e) { notify('Could not save permissions',e.message); }
+  };
+
+  const createExpense = async () => {
+    const amount=Number(expenseAmount);
+    if(!expenseCategory.trim() || !Number.isFinite(amount) || amount<=0) return notify('Check details','Enter an expense category and positive amount.');
+    try {
+      await api.post('/manage/expenses',{category:expenseCategory.trim(),amount,expense_date:expenseDate,branch_id:expenseBranch ? Number(expenseBranch) : null});
+      setExpenseCategory('');setExpenseAmount('');await load();notify('Saved','Expense recorded.');
+    } catch(e) { notify('Could not record expense',e.message); }
+  };
+
+  const issueReceipt = async () => {
+    if(!receiptInstallment.trim()) return notify('Missing installment','Enter a paid installment ID.');
+    try {
+      const response=await api.post('/manage/receipts',{installment_id:Number(receiptInstallment)});
+      const r=response.data.receipt;
+      const customer=response.data.customer || {};
+      const html=`<html><body style="font-family:Arial;padding:28px;color:#17243d"><h1>FINANCD</h1><h2>Payment Receipt</h2><hr/><p><b>Receipt:</b> ${r.receipt_number}</p><p><b>Customer:</b> ${customer.name || 'Customer'}</p><p><b>Loan:</b> ${response.data.loan_code || ''}</p><p><b>Paid date:</b> ${r.paid_date}</p><p><b>Payment method:</b> ${r.payment_method || 'CASH'}</p><h2>Amount received: ${money(r.amount)}</h2><hr/><p>Thank you for your payment.</p></body></html>`;
+      if(Platform.OS==='web') {
+        await Print.printAsync({html});
+      } else {
+        const file=await Print.printToFileAsync({html});
+        if(await Sharing.isAvailableAsync()) await Sharing.shareAsync(file.uri,{mimeType:'application/pdf',dialogTitle:'Share payment receipt'});
+        else notify('Receipt created',r.receipt_number+' · '+money(r.amount));
+      }
+    } catch(e) { notify('Could not create receipt',e.message); }
+  };
+
+  const backup = async () => {
+    try {
+      const response=await api.get('/manage/backup',{responseType:'blob'});
+      if(Platform.OS==='web') {
+        const url=URL.createObjectURL(response.data);const link=document.createElement('a');link.href=url;link.download='financd-backup.sqlite';link.click();URL.revokeObjectURL(url);
+      } else notify('Backup endpoint ready','Use the authenticated backup endpoint from a browser or download client.');
+    } catch(e) { notify('Backup unavailable',e.message); }
+  };
+
+  if(loading) return <View style={styles.loading}><ActivityIndicator size="large" color="#2459d3"/><Text style={styles.muted}>Loading management dashboard…</Text></View>;
+
+  const totals=overview?.totals || {};
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <View style={styles.top}>
+        <View><Text style={styles.eyebrow}>FINANCD CONTROL CENTER</Text><Text style={styles.title}>Management</Text><Text style={styles.muted}>Administration, branches and financial performance</Text></View>
+        <Action title="Refresh" secondary onPress={load}/>
+      </View>
+
+      <View style={styles.metrics}>
+        {(overview?.companies || []).length>0 && <View style={styles.metric}><Text style={styles.metricLabel}>Organizations</Text><Text style={styles.metricValue}>{totals.companies || 0}</Text></View>}
+        <View style={styles.metric}><Text style={styles.metricLabel}>Customers</Text><Text style={styles.metricValue}>{totals.customers || 0}</Text></View>
+        <View style={styles.metric}><Text style={styles.metricLabel}>Kist / Loans</Text><Text style={styles.metricValue}>{totals.loans || 0}</Text></View>
+        <View style={styles.metric}><Text style={styles.metricLabel}>Collected</Text><Text style={styles.metricValue}>{money(financial?.income ?? totals.collected)}</Text></View>
+        <View style={styles.metric}><Text style={styles.metricLabel}>Outstanding</Text><Text style={styles.metricValue}>{money(totals.outstanding)}</Text></View>
+        <View style={styles.metric}><Text style={styles.metricLabel}>Overdue Kist</Text><Text style={styles.metricValue}>{totals.overdue || 0}</Text></View>
+      </View>
+
+      <View style={styles.grid}>
+        <Panel title="Branch management">
+          <Field value={branchName} onChangeText={setBranchName} placeholder="Branch name"/>
+          <Field value={branchCode} onChangeText={setBranchCode} placeholder="Branch code (optional)"/>
+          <Field value={branchTenant} onChangeText={setBranchTenant} placeholder="Organization / tenant ID (Super Admin)" keyboardType="numeric"/>
+          <Action title="Add branch" onPress={createBranch}/>
+          {branches.map(b=><View key={b.id} style={styles.row}><View style={{flex:1}}><Text style={styles.rowTitle}>{b.name}</Text><Text style={styles.muted}>{b.code || 'No code'} · {b.company_name || 'Current organization'}</Text></View><Text style={b.is_active ? styles.active : styles.inactive}>{b.is_active ? 'ACTIVE':'DISABLED'}</Text></View>)}
+          {!branches.length && <Text style={styles.muted}>No branches added yet.</Text>}
+        </Panel>
+
+        <Panel title="Staff & permissions">
+          <Field value={staffName} onChangeText={setStaffName} placeholder="Staff username"/>
+          <Field value={staffPassword} onChangeText={setStaffPassword} placeholder="Temporary password (12+ characters)"/>
+          <Field value={staffTenant} onChangeText={setStaffTenant} placeholder="Organization / tenant ID (Super Admin)" keyboardType="numeric"/>
+          <View style={styles.roleRow}><Action title="Staff / Agent" secondary={staffRole!=='AGENT'} onPress={()=>setStaffRole('AGENT')}/><Action title="Admin" secondary={staffRole!=='ADMIN'} onPress={()=>setStaffRole('ADMIN')}/></View>
+          <Text style={styles.muted}>Only Super Admin can create Admin accounts. Assign branch permissions below.</Text>
+          <Field value={permissionStaff} onChangeText={setPermissionStaff} placeholder="Staff user ID" keyboardType="numeric"/>
+          <Field value={permissionBranch} onChangeText={setPermissionBranch} placeholder="Branch ID" keyboardType="numeric"/>
+          <View style={styles.permissionRow}><Text style={styles.muted}>Collect payments</Text><Action title={canCollect?'ON':'OFF'} secondary={!canCollect} onPress={()=>setCanCollect(!canCollect)}/></View>
+          <View style={styles.permissionRow}><Text style={styles.muted}>Manage customers</Text><Action title={canCustomers?'ON':'OFF'} secondary={!canCustomers} onPress={()=>setCanCustomers(!canCustomers)}/></View>
+          <View style={styles.permissionRow}><Text style={styles.muted}>View reports</Text><Action title={canReports?'ON':'OFF'} secondary={!canReports} onPress={()=>setCanReports(!canReports)}/></View>
+          <Action title="Save branch permissions" onPress={savePermissions}/>
+          <Action title="Create staff account" onPress={createStaff}/>
+          {staff.map(u=><View key={u.id} style={styles.row}><Text style={styles.rowTitle}>{u.username}</Text><Text style={styles.tag}>{u.role}</Text></View>)}
+        </Panel>
+
+        <Panel title="Income, expenses & net">
+          <View style={styles.financeRow}><Text style={styles.muted}>Collections</Text><Text style={styles.amount}>{money(financial?.income)}</Text></View>
+          <View style={styles.financeRow}><Text style={styles.muted}>Operating expenses</Text><Text style={styles.amount}>{money(financial?.expenses)}</Text></View>
+          <View style={styles.financeRow}><Text style={styles.rowTitle}>Net cash result</Text><Text style={[styles.amount,{color:Number(financial?.net||0)>=0?'#16845b':'#c43c45'}]}>{money(financial?.net)}</Text></View>
+          <Text style={styles.muted}>Cash collections less recorded operating expenses; not statutory accounting profit.</Text>
+          <Field value={expenseCategory} onChangeText={setExpenseCategory} placeholder="Expense category (rent, salary…)"/>
+          <Field value={expenseAmount} onChangeText={setExpenseAmount} placeholder="Amount in ₹" keyboardType="decimal-pad"/>
+          <Field value={expenseDate} onChangeText={setExpenseDate} placeholder="Date YYYY-MM-DD"/>
+          <Field value={expenseBranch} onChangeText={setExpenseBranch} placeholder="Branch ID (optional)" keyboardType="numeric"/>
+          <Action title="Record expense" onPress={createExpense}/>
+        </Panel>
+
+        <Panel title="Receipts & database backup">
+          <Text style={styles.muted}>Create a receipt for an installment that has already been marked PAID.</Text>
+          <Field value={receiptInstallment} onChangeText={setReceiptInstallment} placeholder="Paid installment ID" keyboardType="numeric"/>
+          <Action title="Generate receipt" onPress={issueReceipt}/>
+          <View style={{height:12}}/>
+          <Text style={styles.muted}>Full SQLite backup is restricted to Super Admin.</Text>
+          <Action title="Download database backup" secondary onPress={backup}/>
+        </Panel>
+
+        <Panel title="Advanced reports">
+          <Text style={styles.muted}>Filter collections, outstanding Kist, overdue balances and late fees by date, finance product, customer or reporting period.</Text>
+          <Field value={reportStart} onChangeText={setReportStart} placeholder="Start date YYYY-MM-DD"/>
+          <Field value={reportEnd} onChangeText={setReportEnd} placeholder="End date YYYY-MM-DD"/>
+          <Field value={reportCustomer} onChangeText={setReportCustomer} placeholder="Customer ID (optional)" keyboardType="numeric"/>
+          <Text style={styles.muted}>Group report by</Text>
+          <View style={styles.roleRow}>
+            {['month','year','customer','finance_type'].map(g=><Action key={g} title={g.replace('_',' ')} secondary={reportGroup!==g} onPress={()=>setReportGroup(g)}/>)}
+          </View>
+          <Text style={styles.muted}>Finance type: {reportType}</Text>
+          <View style={styles.roleRow}>
+            {['ALL','TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE','GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE','PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN','UDHAR','GIRVI','INSURANCE','OTHER'].map(t=><Action key={t} title={t.replace('_',' ')} secondary={reportType!==t} onPress={()=>setReportType(t)}/>)}
+          </View>
+          <Action title="Generate report" onPress={loadReport}/>
+          {report && <>
+            <View style={styles.financeRow}><Text style={styles.muted}>Collected</Text><Text style={styles.amount}>{money(report.totals?.collected)}</Text></View>
+            <View style={styles.financeRow}><Text style={styles.muted}>Outstanding</Text><Text style={styles.amount}>{money(report.totals?.outstanding)}</Text></View>
+            <View style={styles.financeRow}><Text style={styles.muted}>Overdue</Text><Text style={styles.amount}>{money(report.totals?.overdue)}</Text></View>
+            <View style={styles.financeRow}><Text style={styles.muted}>Late fees</Text><Text style={styles.amount}>{money(report.totals?.late_fees)}</Text></View>
+            {report.rows?.slice(0,30).map((r,i)=><View key={String(r.report_key)+i} style={styles.row}>
+              <View style={{flex:1}}><Text style={styles.rowTitle}>{r.report_key} {r.customer_name ? '· '+r.customer_name : ''}</Text><Text style={styles.muted}>{r.finance_type || ''} · {r.installment_count} Kist</Text></View>
+              <View><Text style={styles.amount}>{money(r.collected)}</Text><Text style={styles.muted}>Due {money(r.outstanding)}</Text></View>
+            </View>)}
+          </>}
+        </Panel>
+
+        <Panel title="Kist account controls">
+          <Text style={styles.muted}>Mark an account as a defaulter, close a fully settled account or reactivate it. This changes loan status; it does not delete payment history.</Text>
+          <Field value={loanId} onChangeText={setLoanId} placeholder="Loan / Kist account ID" keyboardType="numeric"/>
+          <View style={styles.roleRow}>
+            <Action title="Mark defaulter" onPress={()=>updateLoanAccount('DEFAULTER',false)}/>
+            <Action title="Close account" secondary onPress={()=>updateLoanAccount('COMPLETED',true)}/>
+            <Action title="Reactivate" secondary onPress={()=>updateLoanAccount('ACTIVE',false)}/>
+          </View>
+        </Panel>
+
+        <Panel title="Recent audit activity">
+          {audit.slice(0,8).map(item=><View key={item.id} style={styles.row}><View style={{flex:1}}><Text style={styles.rowTitle}>{item.action}</Text><Text style={styles.muted}>{item.actor_username} · {item.created_at}</Text></View><Text style={styles.tag}>{item.entity_type || 'SYSTEM'}</Text></View>)}
+          {!audit.length && <Text style={styles.muted}>No recorded management actions yet.</Text>}
+        </Panel>
+
+        <Panel title="Recent operating expenses">
+          {expenses.slice(0,8).map(item=><View key={item.id} style={styles.row}><View style={{flex:1}}><Text style={styles.rowTitle}>{item.category}</Text><Text style={styles.muted}>{item.expense_date} · {item.branch_name || 'Organization'}</Text></View><Text style={styles.amount}>{money(item.amount)}</Text></View>)}
+          {!expenses.length && <Text style={styles.muted}>No expenses recorded.</Text>}
+        </Panel>
+      </View>
+    </ScrollView>
+  );
+}
+
+const styles=StyleSheet.create({
+  container:{flex:1,backgroundColor:'#f3f6fb'},content:{padding:16,paddingBottom:40,maxWidth:1180,width:'100%',alignSelf:'center'},
+  loading:{flex:1,alignItems:'center',justifyContent:'center',gap:12,backgroundColor:'#f3f6fb'},
+  top:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:12},
+  eyebrow:{fontSize:10,fontWeight:'800',letterSpacing:1.5,color:'#2459d3'},title:{fontSize:28,fontWeight:'800',color:'#15233d',marginTop:4},
+  muted:{fontSize:12,color:'#748198',lineHeight:18},metrics:{flexDirection:'row',flexWrap:'wrap',gap:10,marginBottom:14},
+  metric:{backgroundColor:'#fff',borderRadius:14,padding:14,minWidth:145,flexGrow:1,borderWidth:1,borderColor:'#e8edf5'},
+  metricLabel:{fontSize:11,color:'#748198'},metricValue:{fontSize:20,fontWeight:'800',color:'#17243d',marginTop:7},
+  grid:{flexDirection:'row',flexWrap:'wrap',gap:12},panel:{backgroundColor:'#fff',borderRadius:16,padding:16,borderWidth:1,borderColor:'#e8edf5',width:'100%',maxWidth:570,flexGrow:1},
+  panelTitle:{fontSize:16,fontWeight:'800',color:'#182640',marginBottom:12},input:{borderWidth:1,borderColor:'#e1e7f0',borderRadius:10,paddingHorizontal:12,paddingVertical:11,marginBottom:9,fontSize:14,color:'#17243d',backgroundColor:'#fff'},
+  button:{backgroundColor:'#2459d3',paddingVertical:11,paddingHorizontal:14,borderRadius:10,alignItems:'center',justifyContent:'center',marginBottom:9},
+  buttonText:{color:'#fff',fontSize:13,fontWeight:'700'},secondary:{backgroundColor:'#eef3ff'},secondaryText:{color:'#2459d3'},
+  row:{flexDirection:'row',alignItems:'center',justifyContent:'space-between',gap:10,paddingVertical:10,borderBottomWidth:1,borderBottomColor:'#f0f2f6'},
+  rowTitle:{fontSize:13,fontWeight:'700',color:'#1d2b45'},active:{fontSize:10,color:'#16845b',fontWeight:'800'},inactive:{fontSize:10,color:'#c43c45',fontWeight:'800'},
+  tag:{fontSize:10,fontWeight:'800',color:'#2459d3',backgroundColor:'#eef3ff',padding:6,borderRadius:7},roleRow:{flexDirection:'row',gap:8},financeRow:{flexDirection:'row',justifyContent:'space-between',paddingVertical:7},
+  amount:{fontSize:13,fontWeight:'800',color:'#182640'},permissionRow:{flexDirection:'row',justifyContent:'space-between',alignItems:'center',gap:10}
+});
