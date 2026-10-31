@@ -10,10 +10,25 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const PORT = process.env.PORT || 3000;
 // We securely pull the secret from the .env file instead of hardcoding it.
-const JWT_SECRET = process.env.JWT_SECRET || 'fintrack_super_secret_key_123'; 
+const JWT_SECRET = process.env.JWT_SECRET; 
 
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+const allowedOrigins = (process.env.CORS_ORIGIN || '').split(',').map(value => value.trim()).filter(Boolean);
+app.use(cors({
+    origin(origin, callback) {
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        if (process.env.NODE_ENV !== 'production' && allowedOrigins.length === 0) return callback(null, true);
+        return callback(new Error('Origin is not allowed by CORS'));
+    }
+}));
+app.use(express.json({ limit: '5mb' }));
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Cache-Control', 'no-store');
+    next();
+});
 
 // Enforce a verified current database identity for every API route (except login).
 const { installSecurityGuards } = require('./security-guards');
@@ -43,7 +58,16 @@ const authenticate = (req, res, next) => {
 };
 
 // --- AUTHENTICATION ---
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 10;
+
 app.post('/api/login', (req, res) => {
+    const loginKey = String(req.ip || req.socket.remoteAddress || 'unknown') + ':' + String(req.body?.username || '').toLowerCase();
+    const now = Date.now();
+    const recent = (loginAttempts.get(loginKey) || []).filter(time => now - time < LOGIN_WINDOW_MS);
+    if (recent.length >= LOGIN_MAX_ATTEMPTS) return res.status(429).json({ error: 'Too many login attempts. Try again in 15 minutes.' });
+    loginAttempts.set(loginKey, recent);
     const { username, password } = req.body;
     
     if (!username || !password) {
@@ -69,7 +93,7 @@ app.post('/api/login', (req, res) => {
             return res.status(401).json({ error: 'Incorrect password.' });
         }
 
-        console.log(`User '${username}' successfully logged in.`);
+        loginAttempts.delete(loginKey);
         
         // Embed the tenant ID in the token, unless it's the super admin
         const payload = { 
@@ -80,7 +104,7 @@ app.post('/api/login', (req, res) => {
             features: user.allowed_features || 'ALL'
         };
 
-        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+        const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '24h' });
         res.json({ token, user: payload });
     });
 });
