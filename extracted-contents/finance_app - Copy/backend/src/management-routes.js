@@ -72,6 +72,17 @@ function registerManagementRoutes(app, db) {
       setting_value TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+    // Optional business profile fields for finance-company onboarding.
+    const addTenantColumn = (column, definition) => db.all('PRAGMA table_info(tenants)', [], (err, columns) => {
+      if (err) return console.error('Tenant schema check failed:', err.message);
+      if (!columns.some(col => col.name === column)) db.run(`ALTER TABLE tenants ADD COLUMN ${column} ${definition}`, e => e && console.error('Tenant schema update failed:', e.message));
+    });
+    addTenantColumn('email', 'TEXT');
+    addTenantColumn('phone', 'TEXT');
+    addTenantColumn('contact_person', 'TEXT');
+    addTenantColumn('address', 'TEXT');
+    addTenantColumn('plan_name', "TEXT DEFAULT 'STANDARD'");
+    addTenantColumn('created_by', 'INTEGER');
     // Assignable branch links for existing customer/loan/collection records.
     const addColumnIfMissing = (table, column, definition) => {
       db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
@@ -158,6 +169,72 @@ function registerManagementRoutes(app, db) {
   }
 
   router.use(authenticate, tenantScope);
+
+  const SUPPORTED_FINANCE_TYPES = [
+    'TWO_WHEELER','FOUR_WHEELER','THREE_WHEELER','COMMERCIAL_VEHICLE',
+    'GOLD_LOAN','SILVER_LOAN','PERSONAL_LOAN','HOME_LOAN','MORTGAGE',
+    'PROPERTY_LOAN','BUSINESS_LOAN','EDUCATION_LOAN','AGRICULTURE_LOAN',
+    'UDHAR','GIRVI','INSURANCE','OTHER'
+  ];
+
+  router.get('/features', (req,res) => {
+    if(!isAdmin(req)) return res.status(403).json({error:'Admin permission required'});
+    if(isSuper(req)) return res.json({allowed_features:SUPPORTED_FINANCE_TYPES,all:true});
+    db.get('SELECT allowed_features FROM tenants WHERE id=?',[req.user.tenant_id],(err,row)=>{
+      if(err) return res.status(500).json({error:err.message});
+      const value=(row && row.allowed_features) || 'ALL';
+      const allowed=value==='ALL' ? SUPPORTED_FINANCE_TYPES : value.split(',').filter(type=>SUPPORTED_FINANCE_TYPES.includes(type));
+      res.json({allowed_features:allowed,all:value==='ALL'});
+    });
+  });
+
+  router.get('/kists', (req,res) => {
+    const tenantId=isSuper(req)?Number(req.query.tenant_id):req.user.tenant_id;
+    if(!tenantId) return res.status(400).json({error:'Organization is required'});
+    const {status='ALL',finance_type='ALL',start_date,end_date,customer_id}=req.query;
+    const filters=['i.tenant_id=?']; const params=[tenantId];
+    if(status!=='ALL'){filters.push('i.status=?');params.push(status);}
+    if(finance_type!=='ALL'){filters.push('l.finance_type=?');params.push(finance_type);}
+    if(start_date){filters.push('i.due_date>=?');params.push(start_date);}
+    if(end_date){filters.push('i.due_date<=?');params.push(end_date);}
+    if(customer_id){filters.push('l.customer_id=?');params.push(customer_id);}
+    const sql=`SELECT i.*,l.loan_code,l.finance_type,l.status loan_status,c.id customer_id,c.name customer_name,c.phone customer_phone
+      FROM installments i JOIN loans l ON l.id=i.loan_id JOIN customers c ON c.id=l.customer_id
+      WHERE ${filters.join(' AND ')} ORDER BY i.due_date ASC LIMIT 2000`;
+    db.all(sql,params,(err,rows)=>err?res.status(500).json({error:err.message}):res.json(rows));
+  });
+
+  router.get('/reports/detail', (req,res) => {
+    if(!isAdmin(req)) return res.status(403).json({error:'Admin permission required'});
+    const tenantId=isSuper(req)?Number(req.query.tenant_id):req.user.tenant_id;
+    if(!tenantId) return res.status(400).json({error:'Organization is required'});
+    const {start_date,end_date,finance_type='ALL',customer_id,group_by='month'}=req.query;
+    const where=['i.tenant_id=?']; const params=[tenantId];
+    if(start_date){where.push("COALESCE(i.paid_date,i.due_date)>=?");params.push(start_date);}
+    if(end_date){where.push("COALESCE(i.paid_date,i.due_date)<=?");params.push(end_date);}
+    if(finance_type!=='ALL'){where.push('l.finance_type=?');params.push(finance_type);}
+    if(customer_id){where.push('c.id=?');params.push(customer_id);}
+    const groupExpr={
+      month:"strftime('%Y-%m',COALESCE(i.paid_date,i.due_date))",
+      year:"strftime('%Y',COALESCE(i.paid_date,i.due_date))",
+      customer:"c.id",
+      finance_type:"l.finance_type"
+    }[group_by] || "strftime('%Y-%m',COALESCE(i.paid_date,i.due_date))";
+    const sql=`SELECT ${groupExpr} report_key,l.finance_type,c.id customer_id,c.name customer_name,
+      COUNT(i.id) installment_count,
+      SUM(CASE WHEN i.status='PAID' THEN i.amount+i.late_fee+i.other_charges ELSE 0 END) collected,
+      SUM(CASE WHEN i.status IN ('UNPAID','DELAYED') THEN i.amount ELSE 0 END) outstanding,
+      SUM(CASE WHEN i.status='DELAYED' THEN i.amount ELSE 0 END) overdue,
+      SUM(COALESCE(i.late_fee,0)) late_fees
+      FROM installments i JOIN loans l ON l.id=i.loan_id JOIN customers c ON c.id=l.customer_id
+      WHERE ${where.join(' AND ')} GROUP BY report_key ${group_by==='customer'?',c.id,c.name':''} ${group_by==='finance_type'?',l.finance_type':''}
+      ORDER BY report_key DESC LIMIT 1000`;
+    db.all(sql,params,(err,rows)=>{
+      if(err) return res.status(500).json({error:err.message});
+      const totals=rows.reduce((a,r)=>({collected:a.collected+Number(r.collected||0),outstanding:a.outstanding+Number(r.outstanding||0),overdue:a.overdue+Number(r.overdue||0),late_fees:a.late_fees+Number(r.late_fees||0),installments:a.installments+Number(r.installment_count||0)}),{collected:0,outstanding:0,overdue:0,late_fees:0,installments:0});
+      res.json({group_by,totals,rows});
+    });
+  });
 
   router.get('/overview', (req, res) => {
     if (!isAdmin(req)) return res.status(403).json({ error: 'Admin permission required' });
