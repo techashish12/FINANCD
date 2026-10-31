@@ -11,7 +11,7 @@
  */
 function installSecurityGuards(app, { db, bcrypt, jwt }) {
   const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 32 || secret === 'fintrack_super_secret_key_123') {
+  if (!secret || secret.length < 32 || secret === 'fintrack_super_secret_key_123' || secret.includes('CHANGE_ME')) {
     throw new Error('Set a unique JWT_SECRET of at least 32 characters before starting FINANCD.');
   }
 
