@@ -83,6 +83,10 @@ function registerManagementRoutes(app, db) {
     addTenantColumn('address', 'TEXT');
     addTenantColumn('plan_name', "TEXT DEFAULT 'STANDARD'");
     addTenantColumn('created_by', 'INTEGER');
+    db.all('PRAGMA table_info(users)', [], (err, columns) => {
+      if (err) return console.error('User schema check failed:', err.message);
+      if (!columns.some(col => col.name === 'email')) db.run('ALTER TABLE users ADD COLUMN email TEXT', e => e && console.error('User schema update failed:', e.message));
+    });
     // Assignable branch links for existing customer/loan/collection records.
     const addColumnIfMissing = (table, column, definition) => {
       db.all(`PRAGMA table_info(${table})`, [], (err, columns) => {
