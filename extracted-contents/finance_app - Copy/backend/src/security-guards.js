@@ -18,7 +18,7 @@ function installSecurityGuards(app, { db, bcrypt, jwt }) {
   const readUser = (id, callback) => {
     db.get(
       `SELECT u.id, u.username, u.role, u.tenant_id, u.password,
-              COALESCE(t.is_active, 1) AS tenant_active
+              COALESCE(t.is_active, 1) AS tenant_active, COALESCE(t.allowed_features, 'ALL') AS allowed_features
        FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
        WHERE u.id = ?`,
       [id],
@@ -52,7 +52,8 @@ function installSecurityGuards(app, { db, bcrypt, jwt }) {
         id: user.id,
         username: user.username,
         role: user.role,
-        tenant_id: user.tenant_id
+        tenant_id: user.tenant_id,
+        allowed_features: user.allowed_features || 'ALL'
       };
 
       const actor = req.securityUser;
@@ -61,6 +62,20 @@ function installSecurityGuards(app, { db, bcrypt, jwt }) {
       const isAdmin = actor.role === 'ADMIN' || isSuper;
       const path = req.path;
       const method = req.method;
+
+      // Enforce the finance products enabled for this specific tenant.
+      if (actor.role !== 'SUPER_ADMIN' && actor.tenant_id != null) {
+        const allowed = (user.allowed_features || 'ALL') === 'ALL'
+          ? null
+          : String(user.allowed_features).split(',').map(x=>x.trim()).filter(Boolean);
+        const requestedType = req.body?.finance_type || req.query?.financeType || req.query?.finance_type;
+        if (allowed && requestedType && requestedType !== 'ALL' && !allowed.includes(requestedType)) {
+          return res.status(403).json({ error: 'This finance product is not enabled for your company. Contact Super Admin.' });
+        }
+        if (allowed && req.path === '/loans' && req.method === 'POST' && !allowed.includes(req.body?.finance_type || 'TWO_WHEELER')) {
+          return res.status(403).json({ error: 'This finance product is not enabled for your company.' });
+        }
+      }
 
       if (path === '/backup' && !isSuper) {
         return res.status(403).json({ error: 'Only Super Admin can download full database backups' });
