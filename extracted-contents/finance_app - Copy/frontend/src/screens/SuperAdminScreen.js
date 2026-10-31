@@ -21,7 +21,7 @@ export default function SuperAdminScreen(){
  const [tenants,setTenants]=useState([]);const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(false);
  const [companyName,setCompanyName]=useState('');const [email,setEmail]=useState('');const [phone,setPhone]=useState('');
  const [contactPerson,setContactPerson]=useState('');const [address,setAddress]=useState('');const [plan,setPlan]=useState('STANDARD');
- const [adminUsername,setAdminUsername]=useState('');const [adminPassword,setAdminPassword]=useState('');
+ const [adminUsername,setAdminUsername]=useState('');const [adminEmail,setAdminEmail]=useState('');const [adminPassword,setAdminPassword]=useState('');
  const [selected,setSelected]=useState(['TWO_WHEELER','FOUR_WHEELER','GOLD_LOAN','PERSONAL_LOAN']);
  const load=async()=>{try{const r=await api.get('/super/tenants');setTenants(r.data);}catch(e){notify('Could not load finance companies',e.message);}finally{setLoading(false);}};
  useEffect(()=>{load();},[]);
@@ -30,9 +30,9 @@ export default function SuperAdminScreen(){
   if(!companyName.trim()||!email.trim()||!adminUsername.trim()||adminPassword.length<12||!selected.length){notify('Missing information','Enter company name, valid email, admin username, a 12+ character password and select at least one finance type.');return;}
   setSaving(true);
   try{
-   await api.post('/super/tenants',{company_name:companyName.trim(),email:email.trim(),phone,contact_person:contactPerson,address,plan_name:plan,admin_username:adminUsername.trim(),admin_password:adminPassword,allowed_features:selected});
+   await api.post('/super/tenants',{company_name:companyName.trim(),email:email.trim(),phone,contact_person:contactPerson,address,plan_name:plan,admin_username:adminUsername.trim(),admin_email:adminEmail.trim() || email.trim(),admin_password:adminPassword,allowed_features:selected});
    notify('Finance company created','The company Admin account and selected finance products have been created.');
-   setCompanyName('');setEmail('');setPhone('');setContactPerson('');setAddress('');setAdminUsername('');setAdminPassword('');setSelected([]);
+   setCompanyName('');setEmail('');setPhone('');setContactPerson('');setAddress('');setAdminUsername('');setAdminEmail('');setAdminPassword('');setSelected([]);
    await load();
   }catch(e){notify('Account creation failed',e.message);}finally{setSaving(false);}
  };
@@ -50,6 +50,7 @@ export default function SuperAdminScreen(){
    <Field value={contactPerson} onChangeText={setContactPerson} placeholder="Owner / contact person"/>
    <Field value={address} onChangeText={setAddress} placeholder="Business address"/>
    <Field value={adminUsername} onChangeText={setAdminUsername} placeholder="Finance company Admin username *"/>
+   <Field value={adminEmail} onChangeText={setAdminEmail} placeholder="Admin login email (optional)" keyboardType="email-address"/>
    <Field value={adminPassword} onChangeText={setAdminPassword} placeholder="Temporary password (minimum 12 characters) *" secureTextEntry/>
    <Text style={styles.sectionTitle}>Select finance products enabled for this company</Text>
    <View style={styles.types}>{TYPES.map(([key,label])=><Check key={key} label={label} checked={selected.includes(key)} onPress={()=>toggle(key)}/>)}</View>
