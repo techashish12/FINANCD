@@ -56,6 +56,7 @@ function installSecurityGuards(app, { db, bcrypt, jwt }) {
       };
 
       const actor = req.securityUser;
+      req.user = { ...claims, ...actor }; // Preserve the legacy API's req.user contract using current DB role/tenant.
       const isSuper = actor.role === 'SUPER_ADMIN';
       const isAdmin = actor.role === 'ADMIN' || isSuper;
       const path = req.path;
